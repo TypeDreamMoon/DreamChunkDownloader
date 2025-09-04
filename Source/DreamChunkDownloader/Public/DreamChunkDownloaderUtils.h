@@ -13,5 +13,6 @@ public:
 	static const TCHAR* ChunkStatusToString(EDreamChunkStatus Status);
 	static FString GetTargetPlatformName();
 	static TArray<FDreamPakFileEntry> ParseManifest(const FString& ManifestPath, TMap<FString, FString>* Properties = nullptr);
+	static TArray<FDreamPakFileEntry> ParseManifest(const FString& ManifestPath, TSharedPtr<FJsonObject>& JsonObject);
 	static bool WriteStringAsUtf8TextFile(const FString& FileText, const FString& FilePath);
 };

@@ -34,6 +34,8 @@ namespace FDreamChunkDownloaderStatics
 	static const FString FILE_VERSION_FIELD = TEXT("file-version");
 	static const FString FILE_CHUNK_ID_FIELD = TEXT("chunk-id");
 	static const FString FILE_RELATIVE_URL_FIELD = TEXT("relative-url");
+	static const FString DOWNLOAD_CHUNK_ID_LIST_FIELD = TEXT("download-chunk-id-list");
+	static const FString CLIENT_BUILD_ID = "client-build-id";
 }
 
 UENUM(BlueprintType)
@@ -57,6 +59,19 @@ enum class EDreamChunkDownloaderCacheLocation : uint8
 };
 
 USTRUCT(BlueprintType)
+struct FDreamChunkDownloaderDeploymentSet
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config)
+	FString DeploymentName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config)
+	TArray<FString> Hosts;
+};
+
+USTRUCT(BlueprintType)
 struct FDreamChunkDownloaderStats
 {
 public:
@@ -71,7 +86,7 @@ public:
 	// number of bytes downloaded
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	int64 BytesDownloaded = 0;
-	
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	int64 TotalBytesToDownload = 0;
 
@@ -130,7 +145,7 @@ struct FDreamPakFile
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	bool bIsEmbedded = false;
-	
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	int64 SizeOnDisk = 0; // grows as the file is downloaded. See Entry.FileSize for the target size
 
@@ -149,7 +164,7 @@ struct FDreamChunk
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	int32 ChunkId = -1;
-	
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	bool bIsMounted = false;
 

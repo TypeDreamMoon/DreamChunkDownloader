@@ -12,6 +12,7 @@ class FDreamChunkDownload;
 class IHttpRequest;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FDreamPlatformChunkInstallMultiDelegate, uint32, bool);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FDreamChunkDownloaderCallback, bool, bSuccess);
 
 /**
  * 
@@ -52,6 +53,15 @@ public:
 	void BeginLoadingMode(const FDreamChunkDownloaderTypes::FDreamCallback& OnCallback);
 
 	FDreamPlatformChunkInstallMultiDelegate OnChunkMounted;
+
+public:
+	UFUNCTION(BlueprintCallable)
+	bool StartPatchGame(int InManifestFileDownloadHostIndex = 0);
+
+protected:
+	void HandleDownloadCompleted(bool bSuccess);
+	void HandleLoadingModeCompleted(bool bSuccess);
+	void HandleMountCompleted(bool bSuccess);
 
 public:
 	UFUNCTION(BlueprintPure)
@@ -95,6 +105,18 @@ public:
 	{
 		return LastDeploymentName;
 	}
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	bool bIsDownloadManifestUpToDate = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	TArray<int> ChunkDownloadList;
+
+	UPROPERTY(BlueprintAssignable)
+	FDreamChunkDownloaderCallback OnPatchCompleted;
+
+	UPROPERTY(BlueprintAssignable)
+	FDreamChunkDownloaderCallback OnMountCompleted;
 
 	FDreamChunkDownloaderTypes::FDreamDownloadAnalytics OnDownloadAnalytics;
 

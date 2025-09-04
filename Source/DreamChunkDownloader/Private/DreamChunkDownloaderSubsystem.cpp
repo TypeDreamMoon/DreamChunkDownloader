@@ -80,7 +80,42 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 	TArray<FString> StrayFiles;
 	FileManager.FindFiles(StrayFiles, *CacheFolder, TEXT("*.pak"));
 
-	TArray<FDreamPakFileEntry> LocalManifest = FDreamChunkDownloaderUtils::ParseManifest(CacheFolder / UDreamChunkDownloaderSettings::Get()->LocalManifestFileName);
+	TSharedPtr<FJsonObject> JsonObject;
+	TArray<FDreamPakFileEntry> LocalManifest = FDreamChunkDownloaderUtils::ParseManifest(CacheFolder / UDreamChunkDownloaderSettings::Get()->LocalManifestFileName, JsonObject);
+
+	// Decode remote download list
+	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteChunkDownloadList)
+	{
+		if (JsonObject->HasField(DOWNLOAD_CHUNK_ID_LIST_FIELD))
+		{
+			TArray<TSharedPtr<FJsonValue>> values = JsonObject->GetArrayField(DOWNLOAD_CHUNK_ID_LIST_FIELD);
+			for (auto Value : values)
+			{
+				int AddedChunkID = Value->AsNumber();
+				ChunkDownloadList.Add(AddedChunkID);
+				DCD_LOG(Log, TEXT("Adding chunk %d to download list"), AddedChunkID);
+			}
+		}
+	}
+	else
+	{
+		ChunkDownloadList = UDreamChunkDownloaderSettings::Get()->DownloadChunkIds;
+	}
+
+	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteBuildID)
+	{
+		if (JsonObject->HasField(CLIENT_BUILD_ID))
+		{
+			SetContentBuildId(FDreamChunkDownloaderUtils::GetTargetPlatformName(), JsonObject->GetStringField(CLIENT_BUILD_ID));
+			DCD_LOG(Log, TEXT("Using remote build id '%s'"), *ContentBuildId);
+		}
+	}
+	else
+	{
+		SetContentBuildId(FDreamChunkDownloaderUtils::GetTargetPlatformName(), UDreamChunkDownloaderSettings::Get()->BuildID);
+		DCD_LOG(Log, TEXT("Using local build id '%s'"), *ContentBuildId);
+	}
+
 	if (LocalManifest.Num() > 0)
 	{
 		for (const FDreamPakFileEntry& Entry : LocalManifest)
@@ -134,6 +169,13 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 	}
 
 	SaveLocalManifest(false);
+
+	LoadCachedBuild(LastDeploymentName);
+	UpdateBuild(LastDeploymentName, ContentBuildId, [this](bool bSuccess)
+	{
+		DCD_LOG(Log, TEXT("UpdateBuild completed: %s"), bSuccess ? TEXT("success") : TEXT("failed"));
+		bIsDownloadManifestUpToDate = bSuccess;
+	});
 }
 
 void UDreamChunkDownloaderSubsystem::Deinitialize()
@@ -603,6 +645,72 @@ void UDreamChunkDownloaderSubsystem::BeginLoadingMode(const FDreamChunkDownloade
 	}));
 }
 
+bool UDreamChunkDownloaderSubsystem::StartPatchGame(int InManifestFileDownloadHostIndex)
+{
+	if (bIsDownloadManifestUpToDate)
+	{
+		for (int id : ChunkDownloadList)
+		{
+			EDreamChunkStatus Status = GetChunkStatus(id);
+			DCD_LOG(Log, TEXT("Chunk %d status %s"), id, *UEnum::GetValueAsString(Status));
+		}
+
+		TryDownloadBuildManifest(InManifestFileDownloadHostIndex);
+
+		DownloadChunks(ChunkDownloadList, [this](bool bSuccess)
+		{
+			HandleDownloadCompleted(bSuccess);
+		}, 0);
+
+		BeginLoadingMode([this](bool bSuccess)
+		{
+			HandleLoadingModeCompleted(bSuccess);
+		});
+
+		return true;
+	}
+
+	DCD_LOG(Warning, TEXT("Chunk manifest is out of date. Please update the build."));
+	return false;
+}
+
+void UDreamChunkDownloaderSubsystem::HandleDownloadCompleted(bool bSuccess)
+{
+	if (bSuccess)
+	{
+		DCD_LOG(Log, TEXT("Download completed successfully."));
+
+		FJsonSerializableArrayInt DownloadedChunks;
+
+		for (int ChunkID : ChunkDownloadList)
+		{
+			DownloadedChunks.Add(ChunkID);
+		}
+
+		MountChunks(DownloadedChunks, [this](bool bSuccess)
+		{
+			HandleMountCompleted(bSuccess);
+		});
+
+		OnPatchCompleted.Broadcast(true);
+	}
+	else
+	{
+		DCD_LOG(Error, TEXT("Download failed."));
+		OnPatchCompleted.Broadcast(false);
+	}
+}
+
+void UDreamChunkDownloaderSubsystem::HandleLoadingModeCompleted(bool bSuccess)
+{
+	OnPatchCompleted.Broadcast(bSuccess);
+}
+
+void UDreamChunkDownloaderSubsystem::HandleMountCompleted(bool bSuccess)
+{
+	OnMountCompleted.Broadcast(bSuccess);
+}
+
 EDreamChunkStatus UDreamChunkDownloaderSubsystem::GetChunkStatus(int32 ChunkId)
 {
 	// do we know about this chunk at all?
@@ -664,7 +772,6 @@ void UDreamChunkDownloaderSubsystem::GetAllChunkIds(TArray<int32>& ChunkIds) con
 	Chunks.GetKeys(ChunkIds);
 }
 
-// TODO : 待改
 void UDreamChunkDownloaderSubsystem::SetContentBuildId(const FString& DeploymentName, const FString& NewContentBuildId)
 {
 	// save the content build id
@@ -942,7 +1049,7 @@ void UDreamChunkDownloaderSubsystem::TryDownloadBuildManifest(int TryNumber)
 	check(BuildBaseUrls.Num() > 0);
 
 	// download the manifest from CDN, then load it
-	FString ManifestFileName = FString::Printf(TEXT("BuildManifest-%s.txt"), *PlatformName);
+	FString ManifestFileName = FString::Printf(TEXT("BuildManifest-%s.json"), *PlatformName);
 	FString Url = BuildBaseUrls[TryNumber % BuildBaseUrls.Num()] / ManifestFileName;
 	DCD_LOG(Log, TEXT("Downloading build manifest (attempt #%d) from %s"), TryNumber+1, *Url);
 

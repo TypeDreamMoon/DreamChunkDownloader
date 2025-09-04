@@ -173,6 +173,60 @@ TArray<FDreamPakFileEntry> FDreamChunkDownloaderUtils::ParseManifest(const FStri
 	return Entries;
 }
 
+TArray<FDreamPakFileEntry> FDreamChunkDownloaderUtils::ParseManifest(const FString& ManifestPath, TSharedPtr<FJsonObject>& JsonObject)
+{
+	int32 ExpectedEntries = -1;
+	TArray<FDreamPakFileEntry> Entries;
+	FString FileStrings;
+	FFileHelper::LoadFileToString(FileStrings, *ManifestPath);
+	if (!FileStrings.IsEmpty())
+	{
+		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FileStrings);
+		TSharedPtr<FJsonObject> Object = MakeShareable(new FJsonObject);
+		if (FJsonSerializer::Deserialize(Reader, Object))
+		{
+			DCD_LOG(Log, TEXT("Deserialize Data : %s"), *FileStrings);
+
+			JsonObject = Object;
+
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Value : Object->Values)
+			{
+				if (Value.Key == ENTRIES_COUNT_FIELD)
+				{
+					ExpectedEntries = Value.Value->AsNumber();
+				}
+				else if (Value.Key == ENTRIES_FIELD)
+				{
+					TArray<TSharedPtr<FJsonValue>> EntryValues = Value.Value->AsArray();
+					for (const TSharedPtr<FJsonValue>& Entry : EntryValues)
+					{
+						int ChunkID = -1;
+						FDreamPakFileEntry EntryStruct;
+						EntryStruct.FileName = Entry->AsObject()->GetStringField(FILE_NAME_FIELD);
+						EntryStruct.FileSize = Entry->AsObject()->GetNumberField(FILE_SIZE_FIELD);
+						EntryStruct.FileVersion = Entry->AsObject()->GetStringField(FILE_VERSION_FIELD);
+						EntryStruct.ChunkId = Entry->AsObject()->GetIntegerField(FILE_CHUNK_ID_FIELD);
+						EntryStruct.RelativeUrl = Entry->AsObject()->GetStringField(FILE_RELATIVE_URL_FIELD);
+						Entries.Add(EntryStruct);
+					}
+				}
+			}
+		}
+	}
+	else
+	{
+		DCD_LOG(Log, TEXT("Unable to load manifest file %s"), *ManifestPath);
+	}
+
+	if (ExpectedEntries >= 0 && ExpectedEntries != Entries.Num())
+	{
+		DCD_LOG(Error, TEXT("Corrupt manifest at %s (expected %d entries, got %d)"), *ManifestPath, ExpectedEntries, Entries.Num());
+		Entries.Empty();
+	}
+
+	return Entries;
+}
+
 bool FDreamChunkDownloaderUtils::WriteStringAsUtf8TextFile(const FString& FileText, const FString& FilePath)
 {
 	// convert to UTF8
