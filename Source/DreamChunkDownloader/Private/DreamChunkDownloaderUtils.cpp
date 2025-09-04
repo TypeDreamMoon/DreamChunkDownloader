@@ -97,7 +97,7 @@ const TCHAR* FDreamChunkDownloaderUtils::ChunkStatusToString(EDreamChunkStatus S
 FString FDreamChunkDownloaderUtils::GetTargetPlatformName()
 {
 	FString Str = TEXT("Unknown");
-	
+
 #if PLATFORM_ANDROID
 	Str = TEXT("Android");
 #elif PLATFORM_IOS
@@ -229,31 +229,14 @@ TArray<FDreamPakFileEntry> FDreamChunkDownloaderUtils::ParseManifest(const FStri
 
 bool FDreamChunkDownloaderUtils::WriteStringAsUtf8TextFile(const FString& FileText, const FString& FilePath)
 {
-	// convert to UTF8
-	FTCHARToUTF8 PakFileUtf8(*FileText);
-
-	// open the file for writing
-	bool bSuccess = false;
-	IFileHandle* ManifestFile = IPlatformFile::GetPlatformPhysical().OpenWrite(*FilePath);
-	if (ManifestFile != nullptr)
+	if (FFileHelper::SaveStringToFile(FileText, *FilePath))
 	{
-		// write to the file
-		if (ManifestFile->Write(reinterpret_cast<const uint8*>(PakFileUtf8.Get()), PakFileUtf8.Length()))
-		{
-			DCD_LOG(Log, TEXT("Wrote to %s"), *FilePath);
-			bSuccess = true;
-		}
-		else
-		{
-			DCD_LOG(Error, TEXT("Write error writing to %s"), *FilePath);
-		}
-
-		// close the file
-		delete ManifestFile;
+		DCD_LOG(Log, TEXT("Wrote file %s content %s"), *FilePath, *FileText);
+		return true;
 	}
 	else
 	{
-		DCD_LOG(Error, TEXT("Unable open %s for writing."), *FilePath);
+		DCD_LOG(Error, TEXT("Failed to write file %s"), *FilePath);
+		return false;
 	}
-	return bSuccess;
 }

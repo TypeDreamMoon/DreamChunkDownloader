@@ -86,15 +86,22 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 	// Decode remote download list
 	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteChunkDownloadList)
 	{
-		if (JsonObject->HasField(DOWNLOAD_CHUNK_ID_LIST_FIELD))
+		if (JsonObject.IsValid())
 		{
-			TArray<TSharedPtr<FJsonValue>> values = JsonObject->GetArrayField(DOWNLOAD_CHUNK_ID_LIST_FIELD);
-			for (auto Value : values)
+			if (JsonObject->HasField(DOWNLOAD_CHUNK_ID_LIST_FIELD))
 			{
-				int AddedChunkID = Value->AsNumber();
-				ChunkDownloadList.Add(AddedChunkID);
-				DCD_LOG(Log, TEXT("Adding chunk %d to download list"), AddedChunkID);
+				TArray<TSharedPtr<FJsonValue>> values = JsonObject->GetArrayField(DOWNLOAD_CHUNK_ID_LIST_FIELD);
+				for (auto Value : values)
+				{
+					int AddedChunkID = Value->AsNumber();
+					ChunkDownloadList.Add(AddedChunkID);
+					DCD_LOG(Log, TEXT("Adding chunk %d to download list"), AddedChunkID);
+				}
 			}
+		}
+		else
+		{
+			DCD_LOG(Error, TEXT("Failed to parse remote download list. Maybe the Manifest file was deleted at runtime"));
 		}
 	}
 	else
@@ -104,10 +111,17 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 
 	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteBuildID)
 	{
-		if (JsonObject->HasField(CLIENT_BUILD_ID))
+		if (JsonObject.IsValid())
 		{
-			SetContentBuildId(FDreamChunkDownloaderUtils::GetTargetPlatformName(), JsonObject->GetStringField(CLIENT_BUILD_ID));
-			DCD_LOG(Log, TEXT("Using remote build id '%s'"), *ContentBuildId);
+			if (JsonObject->HasField(CLIENT_BUILD_ID))
+			{
+				SetContentBuildId(FDreamChunkDownloaderUtils::GetTargetPlatformName(), JsonObject->GetStringField(CLIENT_BUILD_ID));
+				DCD_LOG(Log, TEXT("Using remote build id '%s'"), *ContentBuildId);
+			}
+		}
+		else
+		{
+			DCD_LOG(Error, TEXT("Failed to parse remote build id. Maybe the Manifest file was deleted at runtime"));
 		}
 	}
 	else
@@ -181,6 +195,8 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 void UDreamChunkDownloaderSubsystem::Deinitialize()
 {
 	Super::Deinitialize();
+
+	Finalize();
 }
 
 void UDreamChunkDownloaderSubsystem::Finalize()
