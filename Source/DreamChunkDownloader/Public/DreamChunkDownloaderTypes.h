@@ -138,8 +138,10 @@ struct FDreamPakFile
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FDreamPakFileEntry Entry;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	bool bIsCached = false;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	bool bIsMounted = false;
 

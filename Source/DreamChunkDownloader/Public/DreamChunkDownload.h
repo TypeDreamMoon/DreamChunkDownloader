@@ -8,7 +8,7 @@
 class FDreamChunkDownload : public TSharedFromThis<FDreamChunkDownload>
 {
 public:
-	FDreamChunkDownload(const TSharedRef<UDreamChunkDownloaderSubsystem*>& DownloaderIn, const TSharedRef<FDreamPakFile>& PakFileIn);
+	FDreamChunkDownload(const TWeakObjectPtr<UDreamChunkDownloaderSubsystem>& DownloaderIn, const TSharedRef<FDreamPakFile>& PakFileIn);
 	virtual ~FDreamChunkDownload();
 
 	inline bool HasCompleted() const { return bHasCompleted; }
@@ -18,7 +18,7 @@ public:
 	void Cancel(bool bResult);
 
 public:
-	const TSharedRef<UDreamChunkDownloaderSubsystem*> Downloader;
+	const TWeakObjectPtr<UDreamChunkDownloaderSubsystem> Downloader;
 	const TSharedRef<FDreamPakFile> PakFile;
 	const FString TargetFile;
 

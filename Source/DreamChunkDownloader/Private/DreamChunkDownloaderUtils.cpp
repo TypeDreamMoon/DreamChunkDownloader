@@ -115,115 +115,280 @@ FString FDreamChunkDownloaderUtils::GetTargetPlatformName()
 
 TArray<FDreamPakFileEntry> FDreamChunkDownloaderUtils::ParseManifest(const FString& ManifestPath, TMap<FString, FString>* Properties)
 {
-	int32 ExpectedEntries = -1;
-	TArray<FDreamPakFileEntry> Entries;
-	FString FileStrings;
-	FFileHelper::LoadFileToString(FileStrings, *ManifestPath);
-	if (!FileStrings.IsEmpty())
-	{
-		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FileStrings);
-		TSharedPtr<FJsonObject> Object = MakeShareable(new FJsonObject);
-		if (FJsonSerializer::Deserialize(Reader, Object))
-		{
-			DCD_LOG(Log, TEXT("Deserialize Data : %s"), *FileStrings);
-
-			for (const TPair<FString, TSharedPtr<FJsonValue>>& Value : Object->Values)
-			{
-				if (Value.Key == ENTRIES_COUNT_FIELD)
-				{
-					ExpectedEntries = Value.Value->AsNumber();
-				}
-				else if (Value.Key == ENTRIES_FIELD)
-				{
-					TArray<TSharedPtr<FJsonValue>> EntryValues = Value.Value->AsArray();
-					for (const TSharedPtr<FJsonValue>& Entry : EntryValues)
-					{
-						int ChunkID = -1;
-						FDreamPakFileEntry EntryStruct;
-						EntryStruct.FileName = Entry->AsObject()->GetStringField(FILE_NAME_FIELD);
-						EntryStruct.FileSize = Entry->AsObject()->GetNumberField(FILE_SIZE_FIELD);
-						EntryStruct.FileVersion = Entry->AsObject()->GetStringField(FILE_VERSION_FIELD);
-						EntryStruct.ChunkId = Entry->AsObject()->GetIntegerField(FILE_CHUNK_ID_FIELD);
-						EntryStruct.RelativeUrl = Entry->AsObject()->GetStringField(FILE_RELATIVE_URL_FIELD);
-						Entries.Add(EntryStruct);
-					}
-				}
-				else
-				{
-					Properties->Add(Value.Key, Value.Value->AsString());
-				}
-			}
-		}
-	}
-	else
-	{
-		DCD_LOG(Log, TEXT("Unable to load manifest file %s"), *ManifestPath);
-	}
-
-	if (ExpectedEntries >= 0 && ExpectedEntries != Entries.Num())
-	{
-		DCD_LOG(Error, TEXT("Corrupt manifest at %s (expected %d entries, got %d)"), *ManifestPath, ExpectedEntries, Entries.Num());
-		Entries.Empty();
-		if (Properties != nullptr)
-		{
-			Properties->Empty();
-		}
-	}
-
-	return Entries;
+	TSharedPtr<FJsonObject> JsonObject;
+	return ParseManifest(ManifestPath, JsonObject, Properties);
 }
 
 TArray<FDreamPakFileEntry> FDreamChunkDownloaderUtils::ParseManifest(const FString& ManifestPath, TSharedPtr<FJsonObject>& JsonObject)
 {
 	int32 ExpectedEntries = -1;
 	TArray<FDreamPakFileEntry> Entries;
+	JsonObject.Reset();
+
 	FString FileStrings;
-	FFileHelper::LoadFileToString(FileStrings, *ManifestPath);
-	if (!FileStrings.IsEmpty())
+	if (!FFileHelper::LoadFileToString(FileStrings, *ManifestPath))
 	{
-		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FileStrings);
-		TSharedPtr<FJsonObject> Object = MakeShareable(new FJsonObject);
-		if (FJsonSerializer::Deserialize(Reader, Object))
+		DCD_LOG(Log, TEXT("Unable to load manifest file %s"), *ManifestPath);
+		return Entries;
+	}
+
+	if (FileStrings.IsEmpty())
+	{
+		DCD_LOG(Log, TEXT("Manifest file %s is empty"), *ManifestPath);
+		return Entries;
+	}
+
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FileStrings);
+	TSharedPtr<FJsonObject> Object;
+
+	if (!FJsonSerializer::Deserialize(Reader, Object) || !Object.IsValid())
+	{
+		DCD_LOG(Error, TEXT("Failed to deserialize JSON from manifest file %s"), *ManifestPath);
+		return Entries;
+	}
+
+	DCD_LOG(Log, TEXT("Deserialize Data : %s"), *FileStrings);
+
+	// 设置输出JsonObject
+	JsonObject = Object;
+
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& ValuePair : Object->Values)
+	{
+		if (!ValuePair.Value.IsValid())
 		{
-			DCD_LOG(Log, TEXT("Deserialize Data : %s"), *FileStrings);
+			continue;
+		}
 
-			JsonObject = Object;
-
-			for (const TPair<FString, TSharedPtr<FJsonValue>>& Value : Object->Values)
+		if (ValuePair.Key == ENTRIES_COUNT_FIELD)
+		{
+			double NumberValue = 0;
+			if (ValuePair.Value->TryGetNumber(NumberValue))
 			{
-				if (Value.Key == ENTRIES_COUNT_FIELD)
+				ExpectedEntries = static_cast<int32>(NumberValue);
+			}
+		}
+		else if (ValuePair.Key == ENTRIES_FIELD)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* EntryArray = nullptr;
+			if (ValuePair.Value->TryGetArray(EntryArray) && EntryArray)
+			{
+				for (const TSharedPtr<FJsonValue>& EntryValue : *EntryArray)
 				{
-					ExpectedEntries = Value.Value->AsNumber();
-				}
-				else if (Value.Key == ENTRIES_FIELD)
-				{
-					TArray<TSharedPtr<FJsonValue>> EntryValues = Value.Value->AsArray();
-					for (const TSharedPtr<FJsonValue>& Entry : EntryValues)
+					if (!EntryValue.IsValid())
 					{
-						int ChunkID = -1;
-						FDreamPakFileEntry EntryStruct;
-						EntryStruct.FileName = Entry->AsObject()->GetStringField(FILE_NAME_FIELD);
-						EntryStruct.FileSize = Entry->AsObject()->GetNumberField(FILE_SIZE_FIELD);
-						EntryStruct.FileVersion = Entry->AsObject()->GetStringField(FILE_VERSION_FIELD);
-						EntryStruct.ChunkId = Entry->AsObject()->GetIntegerField(FILE_CHUNK_ID_FIELD);
-						EntryStruct.RelativeUrl = Entry->AsObject()->GetStringField(FILE_RELATIVE_URL_FIELD);
-						Entries.Add(EntryStruct);
+						continue;
+					}
+
+					const TSharedPtr<FJsonObject> EntryObject = EntryValue->AsObject();
+					if (!EntryObject.IsValid())
+					{
+						DCD_LOG(Warning, TEXT("Invalid entry object in manifest"));
+						continue;
+					}
+
+					FDreamPakFileEntry EntryStruct;
+
+					// 安全地获取各个字段
+					if (!EntryObject->TryGetStringField(FILE_NAME_FIELD, EntryStruct.FileName))
+					{
+						DCD_LOG(Warning, TEXT("Entry missing FileName field"));
+						continue;
+					}
+
+					double FileSizeDouble = 0;
+					if (!EntryObject->TryGetNumberField(FILE_SIZE_FIELD, FileSizeDouble))
+					{
+						DCD_LOG(Warning, TEXT("Entry missing FileSize field for %s"), *EntryStruct.FileName);
+						continue;
+					}
+					EntryStruct.FileSize = static_cast<uint64>(FileSizeDouble);
+
+					if (!EntryObject->TryGetStringField(FILE_VERSION_FIELD, EntryStruct.FileVersion))
+					{
+						DCD_LOG(Warning, TEXT("Entry missing FileVersion field for %s"), *EntryStruct.FileName);
+						continue;
+					}
+
+					// ChunkId可能不存在，给默认值
+					int32 ChunkIdValue = -1;
+					if (EntryObject->TryGetNumberField(FILE_CHUNK_ID_FIELD, ChunkIdValue))
+					{
+						EntryStruct.ChunkId = ChunkIdValue;
+					}
+					else
+					{
+						EntryStruct.ChunkId = -1;
+					}
+
+					// RelativeUrl可能不存在，给默认值
+					if (!EntryObject->TryGetStringField(FILE_RELATIVE_URL_FIELD, EntryStruct.RelativeUrl))
+					{
+						EntryStruct.RelativeUrl = TEXT("/");
+					}
+
+					Entries.Add(EntryStruct);
+				}
+			}
+		}
+	}
+
+	// 验证entries数量
+	if (ExpectedEntries >= 0 && ExpectedEntries != Entries.Num())
+	{
+		DCD_LOG(Error, TEXT("Corrupt manifest at %s (expected %d entries, got %d)"), *ManifestPath, ExpectedEntries, Entries.Num());
+		Entries.Empty();
+		JsonObject.Reset(); // 清空JsonObject
+	}
+
+	DCD_LOG(Log, TEXT("Successfully parsed %d entries from manifest %s"), Entries.Num(), *ManifestPath);
+	return Entries;
+}
+
+TArray<FDreamPakFileEntry> FDreamChunkDownloaderUtils::ParseManifest(const FString& ManifestPath, TSharedPtr<FJsonObject>& OutJsonObject, TMap<FString, FString>* OutProperties)
+{
+	int32 ExpectedEntries = -1;
+	TArray<FDreamPakFileEntry> Entries;
+	OutJsonObject.Reset();
+
+	if (OutProperties)
+	{
+		OutProperties->Empty();
+	}
+
+	FString FileStrings;
+	if (!FFileHelper::LoadFileToString(FileStrings, *ManifestPath))
+	{
+		DCD_LOG(Log, TEXT("Unable to load manifest file %s"), *ManifestPath);
+		return Entries;
+	}
+
+	if (FileStrings.IsEmpty())
+	{
+		DCD_LOG(Log, TEXT("Manifest file %s is empty"), *ManifestPath);
+		return Entries;
+	}
+
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FileStrings);
+	TSharedPtr<FJsonObject> Object;
+
+	if (!FJsonSerializer::Deserialize(Reader, Object) || !Object.IsValid())
+	{
+		DCD_LOG(Error, TEXT("Failed to deserialize JSON from manifest file %s"), *ManifestPath);
+		return Entries;
+	}
+
+	DCD_LOG(Log, TEXT("Deserialize Data : %s"), *FileStrings);
+
+	// 设置输出JsonObject
+	OutJsonObject = Object;
+
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& ValuePair : Object->Values)
+	{
+		if (!ValuePair.Value.IsValid())
+		{
+			continue;
+		}
+
+		if (ValuePair.Key == ENTRIES_COUNT_FIELD)
+		{
+			double NumberValue = 0;
+			if (ValuePair.Value->TryGetNumber(NumberValue))
+			{
+				ExpectedEntries = static_cast<int32>(NumberValue);
+			}
+		}
+		else if (ValuePair.Key == ENTRIES_FIELD)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* EntryArray = nullptr;
+			if (ValuePair.Value->TryGetArray(EntryArray) && EntryArray)
+			{
+				for (const TSharedPtr<FJsonValue>& EntryValue : *EntryArray)
+				{
+					if (!EntryValue.IsValid())
+					{
+						continue;
+					}
+
+					const TSharedPtr<FJsonObject> EntryObject = EntryValue->AsObject();
+					if (!EntryObject.IsValid())
+					{
+						DCD_LOG(Warning, TEXT("Invalid entry object in manifest"));
+						continue;
+					}
+
+					FDreamPakFileEntry EntryStruct;
+
+					// 必需字段检查
+					if (!EntryObject->TryGetStringField(FILE_NAME_FIELD, EntryStruct.FileName) ||
+						EntryStruct.FileName.IsEmpty())
+					{
+						DCD_LOG(Warning, TEXT("Entry missing or empty FileName field"));
+						continue;
+					}
+
+					double FileSizeDouble = 0;
+					if (!EntryObject->TryGetNumberField(FILE_SIZE_FIELD, FileSizeDouble) || FileSizeDouble <= 0)
+					{
+						DCD_LOG(Warning, TEXT("Entry missing or invalid FileSize field for %s"), *EntryStruct.FileName);
+						continue;
+					}
+					EntryStruct.FileSize = static_cast<uint64>(FileSizeDouble);
+
+					if (!EntryObject->TryGetStringField(FILE_VERSION_FIELD, EntryStruct.FileVersion) ||
+						EntryStruct.FileVersion.IsEmpty())
+					{
+						DCD_LOG(Warning, TEXT("Entry missing or empty FileVersion field for %s"), *EntryStruct.FileName);
+						continue;
+					}
+
+					// 可选字段
+					int32 ChunkIdValue = -1;
+					EntryStruct.ChunkId = EntryObject->TryGetNumberField(FILE_CHUNK_ID_FIELD, ChunkIdValue) ? ChunkIdValue : -1;
+
+					if (!EntryObject->TryGetStringField(FILE_RELATIVE_URL_FIELD, EntryStruct.RelativeUrl))
+					{
+						EntryStruct.RelativeUrl = TEXT("/");
+					}
+
+					Entries.Add(EntryStruct);
+				}
+			}
+		}
+		else
+		{
+			// 其他属性存储到Properties
+			if (OutProperties)
+			{
+				FString StringValue;
+				if (ValuePair.Value->TryGetString(StringValue))
+				{
+					OutProperties->Add(ValuePair.Key, StringValue);
+				}
+				// 处理BUILD_ID等特殊字段
+				else if (ValuePair.Key == BUILD_ID_KEY || ValuePair.Key == CLIENT_BUILD_ID)
+				{
+					if (ValuePair.Value->TryGetString(StringValue))
+					{
+						OutProperties->Add(BUILD_ID_KEY, StringValue);
 					}
 				}
 			}
 		}
 	}
-	else
-	{
-		DCD_LOG(Log, TEXT("Unable to load manifest file %s"), *ManifestPath);
-	}
 
+	// 验证entries数量
 	if (ExpectedEntries >= 0 && ExpectedEntries != Entries.Num())
 	{
 		DCD_LOG(Error, TEXT("Corrupt manifest at %s (expected %d entries, got %d)"), *ManifestPath, ExpectedEntries, Entries.Num());
 		Entries.Empty();
+		OutJsonObject.Reset();
+		if (OutProperties)
+		{
+			OutProperties->Empty();
+		}
 	}
 
+	DCD_LOG(Log, TEXT("Successfully parsed %d entries from manifest %s"), Entries.Num(), *ManifestPath);
 	return Entries;
 }
 

@@ -10,7 +10,7 @@
 
 #define LOCTEXT_NAMESPACE "ChunkDownloader"
 
-FDreamChunkDownload::FDreamChunkDownload(const TSharedRef<UDreamChunkDownloaderSubsystem*>& DownloaderIn, const TSharedRef<FDreamPakFile>& PakFileIn)
+FDreamChunkDownload::FDreamChunkDownload(const TWeakObjectPtr<UDreamChunkDownloaderSubsystem>& DownloaderIn, const TSharedRef<FDreamPakFile>& PakFileIn)
 	: Downloader(DownloaderIn)
 	  , PakFile(PakFileIn)
 	  , TargetFile(Downloader.Get()->GetCacheFolder() / PakFileIn->Entry.FileName)

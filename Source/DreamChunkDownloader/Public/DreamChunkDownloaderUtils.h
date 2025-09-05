@@ -14,5 +14,6 @@ public:
 	static FString GetTargetPlatformName();
 	static TArray<FDreamPakFileEntry> ParseManifest(const FString& ManifestPath, TMap<FString, FString>* Properties = nullptr);
 	static TArray<FDreamPakFileEntry> ParseManifest(const FString& ManifestPath, TSharedPtr<FJsonObject>& JsonObject);
+	static TArray<FDreamPakFileEntry> ParseManifest(const FString& ManifestPath, TSharedPtr<FJsonObject>& OutJsonObject, TMap<FString, FString>* OutProperties);
 	static bool WriteStringAsUtf8TextFile(const FString& FileText, const FString& FilePath);
 };

@@ -29,19 +29,14 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 	PlatformName = FDreamChunkDownloaderUtils::GetTargetPlatformName();
 
 	FString PackageBaseDir;
-
 	switch (UDreamChunkDownloaderSettings::Get()->CacheFolderPath)
 	{
 	case EDreamChunkDownloaderCacheLocation::User:
-		{
-			PackageBaseDir = FPaths::ProjectSavedDir();
-			break;
-		}
+		PackageBaseDir = FPaths::ProjectSavedDir();
+		break;
 	case EDreamChunkDownloaderCacheLocation::Game:
-		{
-			PackageBaseDir = FPaths::ProjectDir();
-			break;
-		}
+		PackageBaseDir = FPaths::ProjectDir();
+		break;
 	}
 
 	PackageBaseDir /= TEXT("DreamChunkDownloader");
@@ -49,9 +44,7 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 	check(!PackageBaseDir.IsEmpty())
 	check(PakFiles.Num() == 0);
 	check(PlatformName != TEXT("Unknown"));
-	DCD_LOG(Log, TEXT("Initializing with platform = '%s' With cache Path = '%s'"),
-	        *PlatformName,
-	        *PackageBaseDir)
+	DCD_LOG(Log, TEXT("Initializing with platform = '%s' With cache Path = '%s'"), *PlatformName, *PackageBaseDir)
 
 	FString PackageCacheDir = FPaths::Combine(PackageBaseDir, TEXT("PakCache"));
 	FString PackageEmbeddedDir = FPaths::Combine(PackageBaseDir, TEXT("Embedded"));
@@ -61,7 +54,6 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 	FPlatformMisc::AddAdditionalRootDirectory(PackageCacheDir);
 
 	TargetDownloadsInFlight = FMath::Max(1, UDreamChunkDownloaderSettings::Get()->MaxConcurrentDownloads);
-
 	CacheFolder = PackageCacheDir;
 	EmbeddedFolder = PackageEmbeddedDir;
 
@@ -71,71 +63,151 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 		DCD_LOG(Error, TEXT("Failed to create cache folder '%s'"), *PackageCacheDir);
 	}
 
+	// 加载embedded paks
 	EmbeddedPaks.Empty();
 	for (const FDreamPakFileEntry& Entry : FDreamChunkDownloaderUtils::ParseManifest(EmbeddedFolder / UDreamChunkDownloaderSettings::Get()->EmbeddedManifestFileName))
 	{
 		EmbeddedPaks.Add(Entry.FileName, Entry);
 	}
 
-	TArray<FString> StrayFiles;
-	FileManager.FindFiles(StrayFiles, *CacheFolder, TEXT("*.pak"));
+	// 处理本地manifest
+	FString LocalManifestPath = CacheFolder / UDreamChunkDownloaderSettings::Get()->LocalManifestFileName;
+	if (!FPaths::FileExists(LocalManifestPath))
+	{
+		DCD_LOG(Warning, TEXT("Local manifest file does not exist at '%s', creating default one"), *LocalManifestPath);
+		CreateDefaultLocalManifest();
+	}
+	else
+	{
+		FString TestContent;
+		if (!FFileHelper::LoadFileToString(TestContent, *LocalManifestPath) || TestContent.IsEmpty())
+		{
+			DCD_LOG(Warning, TEXT("Local manifest file at '%s' is corrupted or empty, recreating"), *LocalManifestPath);
+			CreateDefaultLocalManifest();
+		}
+	}
 
+	// 解析本地manifest并设置下载列表和BuildID
 	TSharedPtr<FJsonObject> JsonObject;
-	TArray<FDreamPakFileEntry> LocalManifest = FDreamChunkDownloaderUtils::ParseManifest(CacheFolder / UDreamChunkDownloaderSettings::Get()->LocalManifestFileName, JsonObject);
+	TArray<FDreamPakFileEntry> LocalManifest = FDreamChunkDownloaderUtils::ParseManifest(LocalManifestPath, JsonObject);
 
-	// Decode remote download list
+	// 设置chunk下载列表
+	SetupChunkDownloadList(JsonObject);
+
+	// 设置Build ID
+	SetupBuildId(JsonObject);
+
+	// 验证配置有效性
+	if (ChunkDownloadList.Num() == 0)
+	{
+		DCD_LOG(Error, TEXT("No chunks configured for download! Please check your settings."));
+	}
+	if (ContentBuildId.IsEmpty())
+	{
+		DCD_LOG(Error, TEXT("Build ID is empty! Please check your settings."));
+	}
+
+	// 处理本地已有的pak文件
+	ProcessLocalPakFiles(LocalManifest, FileManager);
+
+	SaveLocalManifest(false);
+
+	// 尝试加载缓存的构建，只调用一次
+	bool bHasValidCache = LoadCachedBuild(LastDeploymentName);
+
+	if (!bHasValidCache)
+	{
+		DCD_LOG(Warning, TEXT("No valid cached build found, will download from CDN"));
+		UpdateBuild(LastDeploymentName, ContentBuildId, [this](bool bSuccess)
+		{
+			DCD_LOG(Log, TEXT("UpdateBuild completed: %s"), bSuccess ? TEXT("success") : TEXT("failed"));
+			bIsDownloadManifestUpToDate = bSuccess;
+
+			if (bSuccess)
+			{
+				ValidateChunksAvailability();
+			}
+		});
+	}
+	else
+	{
+		DCD_LOG(Log, TEXT("Using valid cached build manifest"));
+		bIsDownloadManifestUpToDate = true;
+		ValidateChunksAvailability();
+	}
+}
+
+void UDreamChunkDownloaderSubsystem::SetupChunkDownloadList(const TSharedPtr<FJsonObject>& JsonObject)
+{
 	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteChunkDownloadList)
 	{
-		if (JsonObject.IsValid())
+		if (JsonObject.IsValid() && JsonObject->HasField(DOWNLOAD_CHUNK_ID_LIST_FIELD))
 		{
-			if (JsonObject->HasField(DOWNLOAD_CHUNK_ID_LIST_FIELD))
+			const TArray<TSharedPtr<FJsonValue>>* ValuesArray = nullptr;
+			if (JsonObject->TryGetArrayField(DOWNLOAD_CHUNK_ID_LIST_FIELD, ValuesArray) && ValuesArray)
 			{
-				TArray<TSharedPtr<FJsonValue>> values = JsonObject->GetArrayField(DOWNLOAD_CHUNK_ID_LIST_FIELD);
-				for (auto Value : values)
+				ChunkDownloadList.Empty();
+				for (const TSharedPtr<FJsonValue>& Value : *ValuesArray)
 				{
-					int AddedChunkID = Value->AsNumber();
-					ChunkDownloadList.Add(AddedChunkID);
-					DCD_LOG(Log, TEXT("Adding chunk %d to download list"), AddedChunkID);
+					if (Value.IsValid())
+					{
+						int32 AddedChunkID = 0;
+						if (Value->TryGetNumber(AddedChunkID))
+						{
+							ChunkDownloadList.Add(AddedChunkID);
+							DCD_LOG(Log, TEXT("Adding chunk %d to download list"), AddedChunkID);
+						}
+					}
 				}
+
+				if (ChunkDownloadList.Num() == 0)
+				{
+					DCD_LOG(Warning, TEXT("Remote download list is empty, falling back to settings"));
+					ChunkDownloadList = UDreamChunkDownloaderSettings::Get()->DownloadChunkIds;
+				}
+				return;
 			}
 		}
-		else
-		{
-			DCD_LOG(Error, TEXT("Failed to parse remote download list. Maybe the Manifest file was deleted at runtime"));
-		}
-	}
-	else
-	{
-		ChunkDownloadList = UDreamChunkDownloaderSettings::Get()->DownloadChunkIds;
+
+		DCD_LOG(Warning, TEXT("Using settings download list (remote list not available)"));
 	}
 
+	ChunkDownloadList = UDreamChunkDownloaderSettings::Get()->DownloadChunkIds;
+	DCD_LOG(Log, TEXT("Using local chunk download list from settings (%d chunks)"), ChunkDownloadList.Num());
+}
+
+void UDreamChunkDownloaderSubsystem::SetupBuildId(const TSharedPtr<FJsonObject>& JsonObject)
+{
 	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteBuildID)
 	{
-		if (JsonObject.IsValid())
+		if (JsonObject.IsValid() && JsonObject->HasField(CLIENT_BUILD_ID))
 		{
-			if (JsonObject->HasField(CLIENT_BUILD_ID))
+			FString RemoteBuildId;
+			if (JsonObject->TryGetStringField(CLIENT_BUILD_ID, RemoteBuildId) && !RemoteBuildId.IsEmpty())
 			{
-				SetContentBuildId(FDreamChunkDownloaderUtils::GetTargetPlatformName(), JsonObject->GetStringField(CLIENT_BUILD_ID));
+				SetContentBuildId(FDreamChunkDownloaderUtils::GetTargetPlatformName(), RemoteBuildId);
 				DCD_LOG(Log, TEXT("Using remote build id '%s'"), *ContentBuildId);
+				return;
 			}
 		}
-		else
-		{
-			DCD_LOG(Error, TEXT("Failed to parse remote build id. Maybe the Manifest file was deleted at runtime"));
-		}
+
+		DCD_LOG(Warning, TEXT("Using settings build ID (remote build ID not available)"));
 	}
-	else
-	{
-		SetContentBuildId(FDreamChunkDownloaderUtils::GetTargetPlatformName(), UDreamChunkDownloaderSettings::Get()->BuildID);
-		DCD_LOG(Log, TEXT("Using local build id '%s'"), *ContentBuildId);
-	}
+
+	SetContentBuildId(FDreamChunkDownloaderUtils::GetTargetPlatformName(), UDreamChunkDownloaderSettings::Get()->BuildID);
+	DCD_LOG(Log, TEXT("Using local build id '%s'"), *ContentBuildId);
+}
+
+void UDreamChunkDownloaderSubsystem::ProcessLocalPakFiles(const TArray<FDreamPakFileEntry>& LocalManifest, IFileManager& FileManager)
+{
+	TArray<FString> StrayFiles;
+	FileManager.FindFiles(StrayFiles, *CacheFolder, TEXT("*.pak"));
 
 	if (LocalManifest.Num() > 0)
 	{
 		for (const FDreamPakFileEntry& Entry : LocalManifest)
 		{
 			TSharedRef<FDreamPakFile> FileInfo = MakeShared<FDreamPakFile>();
-
 			FileInfo->Entry = Entry;
 
 			FString LocalPath = CacheFolder / Entry.FileName;
@@ -145,24 +217,22 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 				FileInfo->SizeOnDisk = SizeOnDisk;
 				if (FileInfo->SizeOnDisk > Entry.FileSize)
 				{
-					DCD_LOG(Warning, TEXT("File '%s' is need update, size on disk = %lld, size in manifest = %lld"),
-					        *LocalPath,
-					        FileInfo->SizeOnDisk,
-					        Entry.FileSize);
+					DCD_LOG(Warning, TEXT("File '%s' needs update, size on disk = %lld, size in manifest = %lld"),
+					        *LocalPath, FileInfo->SizeOnDisk, Entry.FileSize);
 					bNeedsManifestSave = true;
 					continue;
 				}
 
-				if (FileInfo->SizeOnDisk = Entry.FileSize)
+				if (FileInfo->SizeOnDisk == Entry.FileSize)
 				{
 					FileInfo->bIsCached = true;
 				}
 
-				PakFiles.Add(Entry.FileName, FileInfo);;
+				PakFiles.Add(Entry.FileName, FileInfo);
 			}
 			else
 			{
-				DCD_LOG(Log, TEXT("'%s' appears in LocalManifest but is not on disk (not necessarily a problem)"), *LocalPath);
+				DCD_LOG(Log, TEXT("'%s' appears in LocalManifest but is not on disk"), *LocalPath);
 				bNeedsManifestSave = true;
 			}
 
@@ -170,38 +240,145 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 		}
 	}
 
-	for (FString Orphan : StrayFiles)
+	// 清理孤立文件
+	for (const FString& Orphan : StrayFiles)
 	{
 		bNeedsManifestSave = true;
 		FString FullPathOnDisk = CacheFolder / Orphan;
-		DCD_LOG(Log, TEXT("Deleting orphaned file '%s'"), *FullPathOnDisk)
-		if (!ensure(FileManager.Delete(*FullPathOnDisk)))
+		DCD_LOG(Log, TEXT("Deleting orphaned file '%s'"), *FullPathOnDisk);
+		if (!FileManager.Delete(*FullPathOnDisk))
 		{
-			// log an error (best we can do)
 			DCD_LOG(Error, TEXT("Unable to delete '%s'"), *FullPathOnDisk);
 		}
 	}
-
-	SaveLocalManifest(false);
-
-	LoadCachedBuild(LastDeploymentName);
-	UpdateBuild(LastDeploymentName, ContentBuildId, [this](bool bSuccess)
-	{
-		DCD_LOG(Log, TEXT("UpdateBuild completed: %s"), bSuccess ? TEXT("success") : TEXT("failed"));
-		bIsDownloadManifestUpToDate = bSuccess;
-	});
 }
+
+void UDreamChunkDownloaderSubsystem::CreateDefaultLocalManifest()
+{
+	FString JsonData;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonData);
+	Writer->WriteObjectStart();
+
+	// 基本字段
+	Writer->WriteValue(ENTRIES_COUNT_FIELD, 0);
+	Writer->WriteArrayStart(ENTRIES_FIELD);
+	Writer->WriteArrayEnd();
+
+	// 根据配置添加远程下载列表
+	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteChunkDownloadList)
+	{
+		Writer->WriteArrayStart(DOWNLOAD_CHUNK_ID_LIST_FIELD);
+		const TArray<int32>& DefaultChunks = UDreamChunkDownloaderSettings::Get()->DownloadChunkIds;
+		for (int32 ChunkId : DefaultChunks)
+		{
+			Writer->WriteValue(ChunkId);
+		}
+		Writer->WriteArrayEnd();
+		DCD_LOG(Log, TEXT("Added %d default chunk IDs to manifest"), DefaultChunks.Num());
+	}
+
+	// 根据配置添加远程构建ID
+	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteBuildID)
+	{
+		const FString& DefaultBuildId = UDreamChunkDownloaderSettings::Get()->BuildID;
+		Writer->WriteValue(CLIENT_BUILD_ID, DefaultBuildId);
+		DCD_LOG(Log, TEXT("Added default build ID '%s' to manifest"), *DefaultBuildId);
+	}
+
+	Writer->WriteObjectEnd();
+	Writer->Close();
+
+	// 确保目录存在
+	FString ManifestPath = CacheFolder / UDreamChunkDownloaderSettings::Get()->LocalManifestFileName;
+	FString ManifestDir = FPaths::GetPath(ManifestPath);
+
+	if (!IFileManager::Get().MakeDirectory(*ManifestDir, true))
+	{
+		DCD_LOG(Error, TEXT("Failed to create directory for manifest: '%s'"), *ManifestDir);
+		return;
+	}
+
+	if (FDreamChunkDownloaderUtils::WriteStringAsUtf8TextFile(JsonData, ManifestPath))
+	{
+		DCD_LOG(Log, TEXT("Created default local manifest at '%s'"), *ManifestPath);
+	}
+	else
+	{
+		DCD_LOG(Error, TEXT("Failed to write default local manifest to '%s'"), *ManifestPath);
+	}
+}
+
+bool UDreamChunkDownloaderSubsystem::ValidateManifestFile(const FString& ManifestPath, FString& OutErrorMessage)
+{
+	// 检查文件是否存在
+	if (!FPaths::FileExists(ManifestPath))
+	{
+		OutErrorMessage = FString::Printf(TEXT("Manifest file does not exist: %s"), *ManifestPath);
+		return false;
+	}
+
+	// 检查文件是否可读
+	FString FileContent;
+	if (!FFileHelper::LoadFileToString(FileContent, *ManifestPath))
+	{
+		OutErrorMessage = FString::Printf(TEXT("Cannot read manifest file: %s"), *ManifestPath);
+		return false;
+	}
+
+	// 检查文件是否为空
+	if (FileContent.IsEmpty())
+	{
+		OutErrorMessage = FString::Printf(TEXT("Manifest file is empty: %s"), *ManifestPath);
+		return false;
+	}
+
+	// 检查JSON格式是否有效
+	TSharedPtr<FJsonObject> JsonObject;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FileContent);
+	if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())
+	{
+		OutErrorMessage = FString::Printf(TEXT("Manifest file contains invalid JSON: %s"), *ManifestPath);
+		return false;
+	}
+
+	// 检查必要字段是否存在
+	if (!JsonObject->HasField(ENTRIES_FIELD))
+	{
+		OutErrorMessage = FString::Printf(TEXT("Manifest file missing '%s' field: %s"), *ENTRIES_FIELD, *ManifestPath);
+		return false;
+	}
+
+	return true;
+}
+
 
 void UDreamChunkDownloaderSubsystem::Deinitialize()
 {
 	Super::Deinitialize();
 
 	Finalize();
+	
+	if (OnPatchCompleted.IsBound())
+	{
+		OnPatchCompleted.Clear();
+	}
+	if (OnMountCompleted.IsBound())
+	{
+		OnMountCompleted.Clear();		
+	}
 }
 
 void UDreamChunkDownloaderSubsystem::Finalize()
 {
 	DCD_LOG(Display, TEXT("Finalizing."));
+
+	// 首先取消manifest请求
+	if (ManifestRequest.IsValid())
+	{
+		DCD_LOG(Log, TEXT("Cancelling pending manifest request"));
+		ManifestRequest->CancelRequest();
+		ManifestRequest.Reset();
+	}
 
 	// wait for all mounts to finish
 	WaitForMounts();
@@ -241,13 +418,6 @@ void UDreamChunkDownloaderSubsystem::Finalize()
 	PakFiles.Empty();
 	Chunks.Empty();
 
-	// cancel any pending manifest request
-	if (ManifestRequest.IsValid())
-	{
-		ManifestRequest->CancelRequest();
-		ManifestRequest.Reset();
-	}
-
 	// any loading mode is de-facto complete
 	if (PostLoadCallbacks.Num() > 0)
 	{
@@ -272,15 +442,60 @@ void UDreamChunkDownloaderSubsystem::Finalize()
 
 bool UDreamChunkDownloaderSubsystem::LoadCachedBuild(const FString& DeploymentName)
 {
-	// try to re-populate ContentBuildId and the cached manifest
 	TMap<FString, FString> CachedManifestProps;
-	TArray<FDreamPakFileEntry> CachedManifest = FDreamChunkDownloaderUtils::ParseManifest(CacheFolder / UDreamChunkDownloaderSettings::Get()->CachedBuildManifestFileName, &CachedManifestProps);
-	const FString* BuildId = CachedManifestProps.Find(BUILD_ID_KEY);
-	if (BuildId == nullptr || BuildId->IsEmpty())
+	TSharedPtr<FJsonObject> JsonObject;
+
+	FString CachedManifestPath = CacheFolder / UDreamChunkDownloaderSettings::Get()->CachedBuildManifestFileName;
+
+	TArray<FDreamPakFileEntry> CachedManifest = FDreamChunkDownloaderUtils::ParseManifest(CachedManifestPath, JsonObject, &CachedManifestProps);
+
+	// 检查是否有有效的缓存manifest
+	if (CachedManifest.Num() == 0)
 	{
+		DCD_LOG(Warning, TEXT("No cached manifest entries found at '%s'"), *CachedManifestPath);
 		return false;
 	}
 
+	const FString* BuildId = CachedManifestProps.Find(BUILD_ID_KEY);
+	if (BuildId == nullptr || BuildId->IsEmpty())
+	{
+		DCD_LOG(Warning, TEXT("No cached build ID found in manifest"));
+		return false;
+	}
+
+	if (*BuildId != ContentBuildId)
+	{
+		DCD_LOG(Warning, TEXT("Cached build ID (%s) doesn't match current (%s)"), **BuildId, *ContentBuildId);
+		return false;
+	}
+
+	// 验证缓存的manifest包含我们需要的chunks
+	TSet<int32> AvailableChunks;
+	for (const FDreamPakFileEntry& Entry : CachedManifest)
+	{
+		if (Entry.ChunkId >= 0)
+		{
+			AvailableChunks.Add(Entry.ChunkId);
+		}
+	}
+
+	bool bAllChunksAvailable = true;
+	for (int32 RequiredChunk : ChunkDownloadList)
+	{
+		if (!AvailableChunks.Contains(RequiredChunk))
+		{
+			DCD_LOG(Warning, TEXT("Required chunk %d not found in cached manifest"), RequiredChunk);
+			bAllChunksAvailable = false;
+		}
+	}
+
+	if (!bAllChunksAvailable)
+	{
+		DCD_LOG(Warning, TEXT("Cached manifest doesn't contain all required chunks"));
+		return false;
+	}
+
+	DCD_LOG(Log, TEXT("Using cached build manifest with %d entries for build ID: %s"), CachedManifest.Num(), **BuildId);
 	SetContentBuildId(DeploymentName, *BuildId);
 	LoadManifest(CachedManifest);
 	return true;
@@ -290,21 +505,202 @@ void UDreamChunkDownloaderSubsystem::UpdateBuild(const FString& InDeploymentName
 {
 	check(!InContentBuildId.IsEmpty());
 
-	// if the build ID hasn't changed, there's no work to do
-	if (InContentBuildId == ContentBuildId && LastDeploymentName == InDeploymentName)
+	// 验证CDN配置
+	SetContentBuildId(InDeploymentName, InContentBuildId);
+	if (BuildBaseUrls.Num() <= 0)
+	{
+		DCD_LOG(Error, TEXT("No CDN URLs configured for deployment: %s"), *InDeploymentName);
+		ExecuteNextTick(OnCallback, false);
+		return;
+	}
+
+	// 如果已有UpdateBuild在进行中，处理并发调用
+	if (UpdateBuildCallback)
+	{
+		DCD_LOG(Warning, TEXT("UpdateBuild already in progress, handling concurrent request"));
+
+		// 取消之前的manifest请求
+		if (ManifestRequest.IsValid())
+		{
+			ManifestRequest->CancelRequest();
+			ManifestRequest.Reset();
+		}
+
+		// 执行之前的回调（失败）
+		FDreamChunkDownloaderTypes::FDreamCallback PreviousCallback = MoveTemp(UpdateBuildCallback);
+		ExecuteNextTick(PreviousCallback, false);
+	}
+
+	// 检查是否真的需要更新
+	bool bNeedUpdate = true;
+
+	// 检查缓存的manifest是否存在且有效
+	FString CachedManifestPath = CacheFolder / UDreamChunkDownloaderSettings::Get()->CachedBuildManifestFileName;
+	if (FPaths::FileExists(CachedManifestPath))
+	{
+		TMap<FString, FString> CachedManifestProps;
+		TSharedPtr<FJsonObject> JsonObject;
+		TArray<FDreamPakFileEntry> CachedManifest = FDreamChunkDownloaderUtils::ParseManifest(CachedManifestPath, JsonObject, &CachedManifestProps);
+
+		const FString* CachedBuildId = CachedManifestProps.Find(BUILD_ID_KEY);
+		if (CachedBuildId && *CachedBuildId == InContentBuildId && CachedManifest.Num() > 0)
+		{
+			DCD_LOG(Log, TEXT("Cached manifest is up to date for build %s"), *InContentBuildId);
+			bNeedUpdate = false;
+		}
+	}
+
+	if (!bNeedUpdate)
 	{
 		ExecuteNextTick(OnCallback, true);
 		return;
 	}
-	SetContentBuildId(InDeploymentName, InContentBuildId);
 
-	// no overlapped UpdateBuild calls allowed, and Callback is required
-	check(!UpdateBuildCallback);
+	// 设置新的回调
 	check(OnCallback);
 	UpdateBuildCallback = OnCallback;
 
+	DCD_LOG(Log, TEXT("Starting manifest update for build %s from CDN"), *InContentBuildId);
+
 	// start the load/download process
 	TryLoadBuildManifest(0);
+}
+
+void UDreamChunkDownloaderSubsystem::ValidateChunksAvailability()
+{
+	TArray<int32> MissingChunks;
+	TArray<int32> AvailableChunks;
+
+	for (int32 ChunkId : ChunkDownloadList)
+	{
+		EDreamChunkStatus Status = GetChunkStatus(ChunkId);
+		DCD_LOG(Log, TEXT("Chunk %d status: %s"), ChunkId, *UEnum::GetValueAsString(Status));
+
+		// Remote状态也是可用的（可以下载）
+		if (Status == EDreamChunkStatus::Unknown)
+		{
+			MissingChunks.Add(ChunkId);
+		}
+		else
+		{
+			AvailableChunks.Add(ChunkId);
+		}
+	}
+
+	if (MissingChunks.Num() > 0)
+	{
+		auto ConvertIntArrayToStringArray = [](const TArray<int32>& IntArray) -> TArray<FString>
+		{
+			TArray<FString> StringArray;
+			StringArray.Reserve(IntArray.Num());
+			for (int32 Value : IntArray)
+			{
+				StringArray.Add(FString::FromInt(Value));
+			}
+			return StringArray;
+		};
+
+		DCD_LOG(Error, TEXT("Missing chunks in manifest: %s. Available chunks: %s"),
+		        *FString::Join(ConvertIntArrayToStringArray(MissingChunks), TEXT(", ")),
+		        *FString::Join(ConvertIntArrayToStringArray(AvailableChunks), TEXT(", ")));
+
+		if (bIsDownloadManifestUpToDate)
+		{
+			DCD_LOG(Warning, TEXT("Manifest appears up to date but missing required chunks. Forcing manifest refresh."));
+			bIsDownloadManifestUpToDate = false;
+
+			UpdateBuild(LastDeploymentName, ContentBuildId, [this](bool bSuccess)
+			{
+				if (bSuccess)
+				{
+					ValidateChunksAvailability(); // 递归验证
+				}
+			});
+		}
+	}
+	else
+	{
+		DCD_LOG(Log, TEXT("All required chunks (%d) are available in manifest"), AvailableChunks.Num());
+	}
+}
+
+float UDreamChunkDownloaderSubsystem::GetPatchProgress() const
+{
+	if (ChunkDownloadList.Num() == 0)
+	{
+		return 1.0f;
+	}
+
+	int32 CompletedChunks = 0;
+	float TotalProgress = 0.0f;
+
+	for (int32 ChunkId : ChunkDownloadList)
+	{
+		EDreamChunkStatus Status = GetChunkStatus(ChunkId);
+		switch (Status)
+		{
+		case EDreamChunkStatus::Mounted:
+			TotalProgress += 1.0f;
+			CompletedChunks++;
+			break;
+
+		case EDreamChunkStatus::Cached:
+			TotalProgress += 0.95f; // 已下载但未挂载
+			break;
+
+		case EDreamChunkStatus::Downloading:
+			// 可以获取具体的下载进度
+			{
+				const TSharedRef<FDreamChunk>* ChunkPtr = Chunks.Find(ChunkId);
+				if (ChunkPtr != nullptr)
+				{
+					const FDreamChunk& Chunk = **ChunkPtr;
+					for (const TSharedRef<FDreamPakFile>& PakFile : Chunk.PakFiles)
+					{
+						if (PakFile->Download.IsValid())
+						{
+							float FileProgress = static_cast<float>(PakFile->Download->GetProgress()) / PakFile->Entry.FileSize;
+							TotalProgress += FMath::Clamp(FileProgress * 0.9f, 0.0f, 0.9f); // 最多90%，留10%给挂载
+							break; // 假设每个chunk只有一个pak文件
+						}
+					}
+				}
+			}
+			break;
+
+		case EDreamChunkStatus::Partial:
+			TotalProgress += 0.1f; // 部分完成
+			break;
+
+		case EDreamChunkStatus::Remote:
+		case EDreamChunkStatus::Unknown:
+		default:
+			// 没有进度
+			break;
+		}
+	}
+
+	return TotalProgress / ChunkDownloadList.Num();
+}
+
+bool UDreamChunkDownloaderSubsystem::IsReadyForPatching() const
+{
+	if (!bIsDownloadManifestUpToDate)
+	{
+		return false;
+	}
+
+	// 检查所有需要的chunks是否都可用
+	for (int32 ChunkId : ChunkDownloadList)
+	{
+		EDreamChunkStatus Status = GetChunkStatus(ChunkId);
+		if (Status == EDreamChunkStatus::Unknown)
+		{
+			return false;
+		}
+	}
+
+	return true;
 }
 
 void UDreamChunkDownloaderSubsystem::MountChunks(const TArray<int32>& ChunkIds, const FDreamChunkDownloaderTypes::FDreamCallback& OnCallback)
@@ -663,31 +1059,140 @@ void UDreamChunkDownloaderSubsystem::BeginLoadingMode(const FDreamChunkDownloade
 
 bool UDreamChunkDownloaderSubsystem::StartPatchGame(int InManifestFileDownloadHostIndex)
 {
-	if (bIsDownloadManifestUpToDate)
+	DCD_LOG(Log, TEXT("StartPatchGame requested with host index %d"), InManifestFileDownloadHostIndex);
+
+	if (!bIsDownloadManifestUpToDate)
 	{
-		for (int id : ChunkDownloadList)
-		{
-			EDreamChunkStatus Status = GetChunkStatus(id);
-			DCD_LOG(Log, TEXT("Chunk %d status %s"), id, *UEnum::GetValueAsString(Status));
-		}
+		DCD_LOG(Warning, TEXT("Chunk manifest is not up to date, attempting to update..."));
 
-		TryDownloadBuildManifest(InManifestFileDownloadHostIndex);
-
-		DownloadChunks(ChunkDownloadList, [this](bool bSuccess)
+		UpdateBuild(LastDeploymentName, ContentBuildId, [this, InManifestFileDownloadHostIndex](bool bUpdateSuccess)
 		{
-			HandleDownloadCompleted(bSuccess);
-		}, 0);
-
-		BeginLoadingMode([this](bool bSuccess)
-		{
-			HandleLoadingModeCompleted(bSuccess);
+			if (bUpdateSuccess)
+			{
+				DCD_LOG(Log, TEXT("Manifest update completed, retrying patch start"));
+				StartPatchGame(InManifestFileDownloadHostIndex);
+			}
+			else
+			{
+				DCD_LOG(Error, TEXT("Failed to update manifest, cannot start patch"));
+				OnPatchCompleted.Broadcast(false);
+			}
 		});
+		return true; // 异步处理中
+	}
 
+	// 检查所有需要的chunk状态
+	TArray<int32> MountedChunks;
+	TArray<int32> CachedChunks;
+	TArray<int32> DownloadableChunks;
+	TArray<int32> MissingChunks;
+
+	for (int32 ChunkId : ChunkDownloadList)
+	{
+		EDreamChunkStatus Status = GetChunkStatus(ChunkId);
+		DCD_LOG(Log, TEXT("Chunk %d status: %s"), ChunkId, *UEnum::GetValueAsString(Status));
+
+		switch (Status)
+		{
+		case EDreamChunkStatus::Mounted:
+			MountedChunks.Add(ChunkId);
+			break;
+
+		case EDreamChunkStatus::Cached:
+			CachedChunks.Add(ChunkId);
+			break;
+
+		case EDreamChunkStatus::Remote:
+		case EDreamChunkStatus::Downloading:
+		case EDreamChunkStatus::Partial:
+			DownloadableChunks.Add(ChunkId);
+			break;
+
+		case EDreamChunkStatus::Unknown:
+		default:
+			MissingChunks.Add(ChunkId);
+			break;
+		}
+	}
+
+	// 如果有缺失的chunks，无法继续
+	if (MissingChunks.Num() > 0)
+	{
+		auto ConvertIntArrayToString = [](const TArray<int32>& IntArray) -> FString
+		{
+			TArray<FString> StringArray;
+			for (int32 Value : IntArray)
+			{
+				StringArray.Add(FString::FromInt(Value));
+			}
+			return FString::Join(StringArray, TEXT(", "));
+		};
+
+		DCD_LOG(Error, TEXT("Some chunks are missing from manifest: %s"), *ConvertIntArrayToString(MissingChunks));
+		return false;
+	}
+
+	// 如果所有chunks都已经mounted，直接完成
+	if (MountedChunks.Num() == ChunkDownloadList.Num())
+	{
+		DCD_LOG(Log, TEXT("All chunks are already mounted, patch completed"));
+		OnPatchCompleted.Broadcast(true);
 		return true;
 	}
 
-	DCD_LOG(Warning, TEXT("Chunk manifest is out of date. Please update the build."));
-	return false;
+	DCD_LOG(Log, TEXT("Patch status: %d mounted, %d cached, %d need download"),
+	        MountedChunks.Num(), CachedChunks.Num(), DownloadableChunks.Num());
+
+	// 开始loading mode来跟踪进度
+	BeginLoadingMode([this](bool bLoadingSuccess)
+	{
+		HandleLoadingModeCompleted(bLoadingSuccess);
+	});
+
+	// 需要处理的chunks
+	TArray<int32> ChunksNeedProcessing;
+	ChunksNeedProcessing.Append(CachedChunks);
+	ChunksNeedProcessing.Append(DownloadableChunks);
+
+	if (DownloadableChunks.Num() > 0)
+	{
+		DCD_LOG(Log, TEXT("Starting download for %d chunks"), DownloadableChunks.Num());
+
+		DownloadChunks(DownloadableChunks, [this, ChunksNeedProcessing](bool bDownloadSuccess)
+		{
+			if (bDownloadSuccess)
+			{
+				DCD_LOG(Log, TEXT("Download completed, starting mount for all processed chunks"));
+				MountChunks(ChunksNeedProcessing, [this](bool bMountSuccess)
+				{
+					HandleMountCompleted(bMountSuccess);
+					HandleDownloadCompleted(bMountSuccess);
+				});
+			}
+			else
+			{
+				DCD_LOG(Error, TEXT("Download failed"));
+				HandleDownloadCompleted(false);
+			}
+		}, 0);
+	}
+	else if (CachedChunks.Num() > 0)
+	{
+		// 只需要mount已缓存的chunks
+		DCD_LOG(Log, TEXT("No downloads needed, mounting %d cached chunks"), CachedChunks.Num());
+		MountChunks(CachedChunks, [this](bool bMountSuccess)
+		{
+			HandleMountCompleted(bMountSuccess);
+			HandleDownloadCompleted(bMountSuccess);
+		});
+	}
+	else
+	{
+		// 所有chunks都已处理完毕
+		HandleDownloadCompleted(true);
+	}
+
+	return true;
 }
 
 void UDreamChunkDownloaderSubsystem::HandleDownloadCompleted(bool bSuccess)
@@ -696,19 +1201,78 @@ void UDreamChunkDownloaderSubsystem::HandleDownloadCompleted(bool bSuccess)
 	{
 		DCD_LOG(Log, TEXT("Download completed successfully."));
 
-		FJsonSerializableArrayInt DownloadedChunks;
-
-		for (int ChunkID : ChunkDownloadList)
+		auto AllChunksIsThisState = [this](EDreamChunkStatus State) -> bool
 		{
-			DownloadedChunks.Add(ChunkID);
+			bool bSuccess = true;
+
+			for (int ChunkID : ChunkDownloadList)
+			{
+				bSuccess = GetChunkStatus(ChunkID) == State;
+				if (!bSuccess)
+					return false;
+			}
+
+			return bSuccess;
+		};
+
+		if (AllChunksIsThisState(EDreamChunkStatus::Mounted))
+		{
+			DCD_LOG(Log, TEXT("All chunks are mounted, patch completed"));
+			return;
 		}
 
-		MountChunks(DownloadedChunks, [this](bool bSuccess)
+		// 添加详细的chunk状态信息
+		for (int ChunkID : ChunkDownloadList)
 		{
-			HandleMountCompleted(bSuccess);
-		});
+			EDreamChunkStatus Status = GetChunkStatus(ChunkID);
+			DCD_LOG(Log, TEXT("Chunk %d status after download: %s"), ChunkID, *UEnum::GetValueAsString(Status));
+		}
 
-		OnPatchCompleted.Broadcast(true);
+		// 自动挂载下载完成的chunks
+		FJsonSerializableArrayInt DownloadedChunks;
+		for (int ChunkID : ChunkDownloadList)
+		{
+			// 只挂载已经完全下载的chunks
+			EDreamChunkStatus Status = GetChunkStatus(ChunkID);
+			if (Status == EDreamChunkStatus::Cached)
+			{
+				DownloadedChunks.Add(ChunkID);
+			}
+		}
+
+		if (DownloadedChunks.Num() > 0)
+		{
+			auto ConvertIntArrayToString = [](const FJsonSerializableArrayInt& IntArray) -> TArray<FString>
+			{
+				TArray<FString> StringArray;
+				for (int32 Value : IntArray)
+				{
+					StringArray.Add(FString::FromInt(Value));
+				}
+				return StringArray;
+			};
+			DCD_LOG(Log, TEXT("Mounting %d downloaded chunks: %s"), DownloadedChunks.Num(),
+			        *FString::Join(ConvertIntArrayToString(DownloadedChunks), TEXT(", ")));
+
+			MountChunks(DownloadedChunks, [this](bool bMountSuccess)
+			{
+				HandleMountCompleted(bMountSuccess);
+			});
+		}
+		else
+		{
+			// 记录更详细的警告信息
+			FString ChunkStatuses;
+			for (int ChunkID : ChunkDownloadList)
+			{
+				if (!ChunkStatuses.IsEmpty()) ChunkStatuses += TEXT(", ");
+				EDreamChunkStatus Status = GetChunkStatus(ChunkID);
+				ChunkStatuses += FString::Printf(TEXT("%d:%s"), ChunkID, *UEnum::GetValueAsString(Status));
+			}
+
+			DCD_LOG(Warning, TEXT("No chunks ready for mounting after download. Chunk statuses: %s"), *ChunkStatuses);
+			OnPatchCompleted.Broadcast(false);
+		}
 	}
 	else
 	{
@@ -727,7 +1291,7 @@ void UDreamChunkDownloaderSubsystem::HandleMountCompleted(bool bSuccess)
 	OnMountCompleted.Broadcast(bSuccess);
 }
 
-EDreamChunkStatus UDreamChunkDownloaderSubsystem::GetChunkStatus(int32 ChunkId)
+EDreamChunkStatus UDreamChunkDownloaderSubsystem::GetChunkStatus(int32 ChunkId) const
 {
 	// do we know about this chunk at all?
 	const TSharedRef<FDreamChunk>* ChunkPtr = Chunks.Find(ChunkId);
@@ -807,6 +1371,23 @@ void UDreamChunkDownloaderSubsystem::SetContentBuildId(const FString& Deployment
 			break;
 		}
 	}
+
+	bool bFoundDeployment = false;
+	for (const FDreamChunkDownloaderDeploymentSet& Set : UDreamChunkDownloaderSettings::Get()->DeploymentSets)
+	{
+		if (DeploymentName == Set.DeploymentName)
+		{
+			bFoundDeployment = true;
+			CdnBaseUrls = Set.Hosts;
+			break;
+		}
+	}
+
+	if (!bFoundDeployment)
+	{
+		DCD_LOG(Error, TEXT("Deployment '%s' not found in settings"), *DeploymentName);
+	}
+
 	if (CdnBaseUrls.Num() <= 0)
 	{
 		DCD_LOG(Warning, TEXT("Please see the ProjectSettings DreamPlugin/Dream the Chunk Downloader Setting - > DeploymentSets and set! Count: %d"), UDreamChunkDownloaderSettings::Get()->DeploymentSets.Num());
@@ -1007,114 +1588,233 @@ void UDreamChunkDownloaderSubsystem::TryLoadBuildManifest(int TryNumber)
 {
 	// load the local build manifest
 	TMap<FString, FString> CachedManifestProps;
-	TArray<FDreamPakFileEntry> CachedManifest = FDreamChunkDownloaderUtils::ParseManifest(CacheFolder / UDreamChunkDownloaderSettings::Get()->CachedBuildManifestFileName, &CachedManifestProps);
+	TSharedPtr<FJsonObject> JsonObject;
+	TArray<FDreamPakFileEntry> CachedManifest = FDreamChunkDownloaderUtils::ParseManifest(
+		CacheFolder / UDreamChunkDownloaderSettings::Get()->CachedBuildManifestFileName,
+		JsonObject,
+		&CachedManifestProps // 使用三参数版本
+	);
 
-	// see if the BUILD_ID property matches
-	if (CachedManifestProps.FindOrAdd(BUILD_ID_KEY) != ContentBuildId)
+	// 其余代码保持不变...
+
+	// Check if we have a valid cached manifest that matches our build ID
+	const FString* CachedBuildId = CachedManifestProps.Find(BUILD_ID_KEY);
+	bool bManifestMatches = (CachedBuildId != nullptr && *CachedBuildId == ContentBuildId);
+	bool bManifestValid = (CachedManifest.Num() > 0 && bManifestMatches);
+
+	if (bManifestValid)
 	{
-		// if we have no CDN configured, we're done
-		if (BuildBaseUrls.Num() <= 0)
-		{
-			DCD_LOG(Error, TEXT("Unable to download build manifest. No CDN urls configured."));
-			LoadingModeStats.LastError = LOCTEXT("UnableToDownloadManifest", "Unable to download build manifest. (NoCDN)");
+		// Cached build manifest is up to date, load this one
+		DCD_LOG(Log, TEXT("Using cached manifest for build ID: %s"), *ContentBuildId);
+		LoadManifest(CachedManifest);
 
-			// execute and clear the callback
-			FDreamChunkDownloaderTypes::FDreamCallback Callback = MoveTemp(UpdateBuildCallback);
-			ExecuteNextTick(Callback, false);
-			return;
-		}
-
-		// fast path the first try
-		if (TryNumber <= 0)
-		{
-			// download it
-			TryDownloadBuildManifest(TryNumber);
-			return;
-		}
-
-		// compute delay before re-starting download
-		float SecondsToDelay = TryNumber * 5.0f;
-		if (SecondsToDelay > 60)
-		{
-			SecondsToDelay = 60;
-		}
-
-		// set a ticker to delay
-		DCD_LOG(Log, TEXT("Will re-attempt manifest download in %f seconds"), SecondsToDelay);
-		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, TryNumber](float Unused)
-		{
-			if (IsValid(this))
-			{
-				this->TryDownloadBuildManifest(TryNumber);
-			}
-			return false;
-		}), SecondsToDelay);
+		// Execute and clear the callback - SUCCESS
+		FDreamChunkDownloaderTypes::FDreamCallback Callback = MoveTemp(UpdateBuildCallback);
+		ExecuteNextTick(Callback, true);
 		return;
 	}
 
-	// cached build manifest is up to date, load this one
-	LoadManifest(CachedManifest);
+	// Need to download new manifest
+	if (BuildBaseUrls.Num() <= 0)
+	{
+		DCD_LOG(Error, TEXT("Unable to download build manifest. No CDN urls configured."));
+		LoadingModeStats.LastError = LOCTEXT("UnableToDownloadManifest", "Unable to download build manifest. (NoCDN)");
 
-	// execute and clear the callback
-	FDreamChunkDownloaderTypes::FDreamCallback Callback = MoveTemp(UpdateBuildCallback);
-	ExecuteNextTick(Callback, true);
+		FDreamChunkDownloaderTypes::FDreamCallback Callback = MoveTemp(UpdateBuildCallback);
+		ExecuteNextTick(Callback, false);
+		return;
+	}
+
+	// Check retry limits to prevent infinite loops
+	const int32 MAX_MANIFEST_RETRIES = 10;
+	if (TryNumber >= MAX_MANIFEST_RETRIES)
+	{
+		DCD_LOG(Error, TEXT("Maximum manifest download retries (%d) exceeded"), MAX_MANIFEST_RETRIES);
+		LoadingModeStats.LastError = LOCTEXT("ManifestMaxRetriesExceeded", "Maximum manifest download retries exceeded");
+
+		FDreamChunkDownloaderTypes::FDreamCallback Callback = MoveTemp(UpdateBuildCallback);
+		ExecuteNextTick(Callback, false);
+		return;
+	}
+
+	// Fast path the first try - no delay
+	if (TryNumber <= 0)
+	{
+		TryDownloadBuildManifest(TryNumber);
+		return;
+	}
+
+	// Compute delay before re-attempting download
+	float SecondsToDelay = FMath::Min(TryNumber * 5.0f, 60.0f);
+
+	DCD_LOG(Log, TEXT("Will re-attempt manifest download in %f seconds (attempt %d/%d)"),
+	        SecondsToDelay, TryNumber + 1, MAX_MANIFEST_RETRIES);
+
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, TryNumber](float Unused)
+	{
+		if (IsValid(this))
+		{
+			this->TryDownloadBuildManifest(TryNumber);
+		}
+		return false;
+	}), SecondsToDelay);
 }
 
 void UDreamChunkDownloaderSubsystem::TryDownloadBuildManifest(int TryNumber)
 {
 	check(BuildBaseUrls.Num() > 0);
 
-	// download the manifest from CDN, then load it
+	// 修复：如果已有请求在进行中，先取消它
+	if (ManifestRequest.IsValid())
+	{
+		DCD_LOG(Warning, TEXT("Previous manifest request still active, cancelling it"));
+		ManifestRequest->CancelRequest();
+		ManifestRequest.Reset();
+	}
+
+	// Download the manifest from CDN
 	FString ManifestFileName = FString::Printf(TEXT("BuildManifest-%s.json"), *PlatformName);
 	FString Url = BuildBaseUrls[TryNumber % BuildBaseUrls.Num()] / ManifestFileName;
-	DCD_LOG(Log, TEXT("Downloading build manifest (attempt #%d) from %s"), TryNumber+1, *Url);
 
-	// download the manifest from the root CDN
+	DCD_LOG(Log, TEXT("Downloading build manifest (attempt #%d) from %s"), TryNumber + 1, *Url);
+
+	// Download the manifest from the root CDN
 	FHttpModule& HttpModule = FModuleManager::LoadModuleChecked<FHttpModule>("HTTP");
-	check(!ManifestRequest.IsValid());
+
 	ManifestRequest = HttpModule.Get().CreateRequest();
 	ManifestRequest->SetURL(Url);
 	ManifestRequest->SetVerb(TEXT("GET"));
+
+	// Set reasonable timeout
+	ManifestRequest->SetTimeout(30.0f);
+
 	FString CachedManifestFullPath = CacheFolder / UDreamChunkDownloaderSettings::Get()->CachedBuildManifestFileName;
-	ManifestRequest->OnProcessRequestComplete().BindLambda([this, TryNumber, CachedManifestFullPath](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSuccess)
-	{
-		// if successful, save
-		FText LastError;
-		if (bSuccess && HttpResponse.IsValid())
+
+	// 使用弱引用避免循环引用
+	TWeakObjectPtr<UDreamChunkDownloaderSubsystem> WeakThis(this);
+
+	ManifestRequest->OnProcessRequestComplete().BindLambda([WeakThis, TryNumber, CachedManifestFullPath](
+		FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSuccess)
 		{
-			const int32 HttpStatus = HttpResponse->GetResponseCode();
-			if (EHttpResponseCodes::IsOk(HttpStatus))
+			// 检查subsystem是否仍然有效
+			if (!WeakThis.IsValid())
 			{
-				// Save the manifest to a file
-				if (!FDreamChunkDownloaderUtils::WriteStringAsUtf8TextFile(HttpResponse->GetContentAsString(), CachedManifestFullPath))
+				DCD_LOG(Warning, TEXT("Subsystem was destroyed while downloading manifest '%s'"), *HttpRequest->GetURL());
+				return;
+			}
+
+			UDreamChunkDownloaderSubsystem* Self = WeakThis.Get();
+
+			// 清理请求引用
+			if (Self->ManifestRequest.IsValid() && Self->ManifestRequest.Get() == HttpRequest.Get())
+			{
+				Self->ManifestRequest.Reset();
+			}
+
+			FText LastError;
+			bool bDownloadSuccess = false;
+
+			if (bSuccess && HttpResponse.IsValid())
+			{
+				const int32 HttpStatus = HttpResponse->GetResponseCode();
+				if (EHttpResponseCodes::IsOk(HttpStatus))
 				{
-					DCD_LOG(Error, TEXT("Failed to write manifest to '%s'"), *CachedManifestFullPath);
-					LastError = FText::Format(LOCTEXT("FailedToWriteManifest", "[Try {0}] Failed to write manifest."), FText::AsNumber(TryNumber));
+					const FString ResponseContent = HttpResponse->GetContentAsString();
+
+					// Validate that we got actual JSON content
+					if (!ResponseContent.IsEmpty())
+					{
+						// Try to parse the JSON to make sure it's valid before saving
+						TSharedPtr<FJsonObject> JsonObject;
+						TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseContent);
+
+						if (FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid())
+						{
+							// Add our build ID to the manifest before saving
+							JsonObject->SetStringField(BUILD_ID_KEY, Self->ContentBuildId);
+
+							// Serialize back to string with build ID
+							FString OutputString;
+							TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
+							if (FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer))
+							{
+								// Save the manifest with build ID to file
+								if (FDreamChunkDownloaderUtils::WriteStringAsUtf8TextFile(OutputString, CachedManifestFullPath))
+								{
+									DCD_LOG(Log, TEXT("Successfully downloaded and saved manifest with build ID: %s"), *Self->ContentBuildId);
+									bDownloadSuccess = true;
+								}
+								else
+								{
+									DCD_LOG(Error, TEXT("Failed to write manifest to '%s'"), *CachedManifestFullPath);
+									LastError = FText::Format(LOCTEXT("FailedToWriteManifest", "[Try {0}] Failed to write manifest."), FText::AsNumber(TryNumber + 1));
+								}
+							}
+							else
+							{
+								DCD_LOG(Error, TEXT("Failed to serialize manifest JSON"));
+								LastError = FText::Format(LOCTEXT("FailedToSerializeManifest", "[Try {0}] Failed to serialize manifest JSON."), FText::AsNumber(TryNumber + 1));
+							}
+						}
+						else
+						{
+							DCD_LOG(Error, TEXT("Downloaded manifest contains invalid JSON from '%s'"), *HttpRequest->GetURL());
+							LastError = FText::Format(LOCTEXT("ManifestInvalidJson", "[Try {0}] Downloaded manifest contains invalid JSON."), FText::AsNumber(TryNumber + 1));
+						}
+					}
+					else
+					{
+						DCD_LOG(Error, TEXT("Downloaded manifest is empty from '%s'"), *HttpRequest->GetURL());
+						LastError = FText::Format(LOCTEXT("ManifestEmpty", "[Try {0}] Downloaded manifest is empty."), FText::AsNumber(TryNumber + 1));
+					}
+				}
+				else
+				{
+					DCD_LOG(Error, TEXT("HTTP %d while downloading manifest from '%s'"), HttpStatus, *HttpRequest->GetURL());
+					LastError = FText::Format(LOCTEXT("ManifestHttpError_FailureCode", "[Try {0}] Manifest download failed (HTTP {1})"),
+					                          FText::AsNumber(TryNumber + 1), FText::AsNumber(HttpStatus));
 				}
 			}
 			else
 			{
-				DCD_LOG(Error, TEXT("HTTP %d while downloading manifest from '%s'"), HttpStatus, *HttpRequest->GetURL());
-				LastError = FText::Format(LOCTEXT("ManifestHttpError_FailureCode", "[Try {0}] Manifest download failed (HTTP {1})"), FText::AsNumber(TryNumber), FText::AsNumber(HttpStatus));
+				DCD_LOG(Error, TEXT("HTTP connection issue while downloading manifest '%s'"), *HttpRequest->GetURL());
+				LastError = FText::Format(LOCTEXT("ManifestHttpError_Generic", "[Try {0}] Connection issues downloading manifest. Check your network connection..."),
+				                          FText::AsNumber(TryNumber + 1));
 			}
-		}
-		else
-		{
-			DCD_LOG(Error, TEXT("HTTP connection issue while downloading manifest '%s'"), *HttpRequest->GetURL());
-			LastError = FText::Format(LOCTEXT("ManifestHttpError_Generic", "[Try {0}] Connection issues downloading manifest. Check your network connection..."), FText::AsNumber(TryNumber));
-		}
 
-		// try to load it
-		if (!IsValid(this))
+			// Update error state
+			Self->LoadingModeStats.LastError = LastError;
+
+			if (bDownloadSuccess)
+			{
+				// Successfully downloaded and saved manifest, now try to load it
+				DCD_LOG(Log, TEXT("Manifest download successful, attempting to load..."));
+				Self->TryLoadBuildManifest(0); // Reset try count since download succeeded
+			}
+			else
+			{
+				// Download failed, retry with incremented count
+				DCD_LOG(Warning, TEXT("Manifest download failed, will retry..."));
+				Self->TryLoadBuildManifest(TryNumber + 1);
+			}
+		});
+
+	// Start the HTTP request
+	if (!ManifestRequest->ProcessRequest())
+	{
+		DCD_LOG(Error, TEXT("Failed to start manifest download request"));
+		ManifestRequest.Reset();
+
+		// 延迟重试
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this, TryNumber](float)
 		{
-			DCD_LOG(Warning, TEXT("FChunkDownloader was destroyed while downloading manifest '%s'"), *HttpRequest->GetURL());
-			return;
-		}
-		this->ManifestRequest.Reset();
-		this->LoadingModeStats.LastError = LastError; // ok with this clearing the error on success
-		this->TryLoadBuildManifest(TryNumber + 1);
-	});
-	ManifestRequest->ProcessRequest();
+			if (IsValid(this))
+			{
+				TryLoadBuildManifest(TryNumber + 1);
+			}
+			return false;
+		}), 1.0f);
+	}
 }
 
 void UDreamChunkDownloaderSubsystem::WaitForMounts()
@@ -1149,58 +1849,93 @@ void UDreamChunkDownloaderSubsystem::WaitForMounts()
 
 void UDreamChunkDownloaderSubsystem::SaveLocalManifest(bool bForce)
 {
-	if (bForce || bNeedsManifestSave)
+	if (!bForce && !bNeedsManifestSave)
 	{
-		// build the whole file into an FString (wish we could stream it out)
-		int32 NumEntries = 0;
-		for (const auto& It : PakFiles)
+		return;
+	}
+
+	// 构建JSON数据
+	int32 NumEntries = 0;
+	TArray<TSharedRef<FDreamPakFile>> ValidPakFiles;
+
+	for (const auto& It : PakFiles)
+	{
+		if (!It.Value->bIsEmbedded && (It.Value->SizeOnDisk > 0 || It.Value->Download.IsValid()))
 		{
-			if (!It.Value->bIsEmbedded)
-			{
-				if (It.Value->SizeOnDisk > 0 || It.Value->Download.IsValid())
-				{
-					++NumEntries;
-				}
-			}
+			ValidPakFiles.Add(It.Value);
+			++NumEntries;
 		}
+	}
 
-		FString JsonData;
-		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonData);
+	FString JsonData;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonData);
+	Writer->WriteObjectStart();
+
+	Writer->WriteValue(ENTRIES_COUNT_FIELD, NumEntries);
+
+	Writer->WriteArrayStart(ENTRIES_FIELD);
+	for (const TSharedRef<FDreamPakFile>& PakFile : ValidPakFiles)
+	{
+		const FDreamPakFileEntry& Entry = PakFile->Entry;
 		Writer->WriteObjectStart();
+		Writer->WriteValue(FILE_NAME_FIELD, Entry.FileName);
+		Writer->WriteValue(FILE_SIZE_FIELD, Entry.FileSize);
+		Writer->WriteValue(FILE_VERSION_FIELD, Entry.FileVersion);
+		Writer->WriteValue(FILE_CHUNK_ID_FIELD, -1); // 本地manifest中设为-1
+		Writer->WriteValue(FILE_RELATIVE_URL_FIELD, TEXT("/"));
+		Writer->WriteObjectEnd();
+	}
+	Writer->WriteArrayEnd();
 
-		Writer->WriteValue(ENTRIES_COUNT_FIELD, NumEntries);
-
-		Writer->WriteArrayStart(ENTRIES_FIELD);
-		for (const auto& It : PakFiles)
+	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteChunkDownloadList)
+	{
+		Writer->WriteArrayStart(DOWNLOAD_CHUNK_ID_LIST_FIELD);
+		for (int32 ChunkId : ChunkDownloadList)
 		{
-			if (!It.Value->bIsEmbedded)
-			{
-				if (It.Value->SizeOnDisk > 0 || It.Value->Download.IsValid())
-				{
-					// local manifest
-					const FDreamPakFileEntry& PakFile = It.Value->Entry;
-					Writer->WriteObjectStart();
-					Writer->WriteValue(FILE_NAME_FIELD, PakFile.FileName);
-					Writer->WriteValue(FILE_SIZE_FIELD, PakFile.FileSize);
-					Writer->WriteValue(FILE_VERSION_FIELD, PakFile.FileVersion);
-					Writer->WriteValue(FILE_CHUNK_ID_FIELD, -1);
-					Writer->WriteValue(FILE_RELATIVE_URL_FIELD, TEXT("/"));
-					Writer->WriteObjectEnd();
-				}
-			}
+			Writer->WriteValue(ChunkId);
 		}
 		Writer->WriteArrayEnd();
-		Writer->WriteObjectEnd();
-		Writer->Close();
+	}
 
-		DCD_LOG(Log, TEXT("Saved Data : %s"), *JsonData);
+	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteBuildID)
+	{
+		Writer->WriteValue(CLIENT_BUILD_ID, ContentBuildId);
+	}
 
-		FString ManifestPath = CacheFolder / UDreamChunkDownloaderSettings::Get()->LocalManifestFileName;
-		if (FDreamChunkDownloaderUtils::WriteStringAsUtf8TextFile(JsonData, ManifestPath))
+	Writer->WriteObjectEnd();
+	Writer->Close();
+
+	FString ManifestPath = CacheFolder / UDreamChunkDownloaderSettings::Get()->LocalManifestFileName;
+	FString TempPath = ManifestPath + TEXT(".tmp");
+
+	bool bWriteSuccess = FDreamChunkDownloaderUtils::WriteStringAsUtf8TextFile(JsonData, TempPath);
+	if (bWriteSuccess)
+	{
+		// 验证临时文件
+		FString ErrorMessage;
+		if (ValidateManifestFile(TempPath, ErrorMessage))
 		{
-			// mark that we have saved
-			bNeedsManifestSave = false;
+			// 原子性替换
+			if (IFileManager::Get().Move(*ManifestPath, *TempPath))
+			{
+				bNeedsManifestSave = false;
+				DCD_LOG(Log, TEXT("Successfully saved local manifest with %d entries"), NumEntries);
+			}
+			else
+			{
+				DCD_LOG(Error, TEXT("Failed to move temp manifest file from '%s' to '%s'"), *TempPath, *ManifestPath);
+				IFileManager::Get().Delete(*TempPath); // 清理临时文件
+			}
 		}
+		else
+		{
+			DCD_LOG(Error, TEXT("Validation failed for temp manifest: %s"), *ErrorMessage);
+			IFileManager::Get().Delete(*TempPath); // 清理无效的临时文件
+		}
+	}
+	else
+	{
+		DCD_LOG(Error, TEXT("Failed to write temp manifest file: '%s'"), *TempPath);
 	}
 }
 
@@ -1578,6 +2313,8 @@ void UDreamChunkDownloaderSubsystem::ExecuteNextTick(const FDreamChunkDownloader
 
 void UDreamChunkDownloaderSubsystem::IssueDownloads()
 {
+	int32 StartedDownloads = 0;
+
 	for (int32 i = 0; i < DownloadRequests.Num() && i < TargetDownloadsInFlight; ++i)
 	{
 		TSharedRef<FDreamPakFile> DownloadPakFile = DownloadRequests[i];
@@ -1587,16 +2324,32 @@ void UDreamChunkDownloaderSubsystem::IssueDownloads()
 			continue;
 		}
 
+		// 检查文件是否已经存在且有效
+		if (DownloadPakFile->bIsCached)
+		{
+			DCD_LOG(Log, TEXT("Pak file %s is already cached, skipping download"),
+			        *DownloadPakFile->Entry.FileName);
+			continue;
+		}
+
 		// log that we're starting a download
-		DCD_LOG(Log, TEXT("Pak file %s download requested (%s)."),
+		DCD_LOG(Log, TEXT("Starting download: %s (%lld bytes) from %s"),
 		        *DownloadPakFile->Entry.FileName,
+		        DownloadPakFile->Entry.FileSize,
 		        *DownloadPakFile->Entry.RelativeUrl
 		);
 		bNeedsManifestSave = true;
 
-		// make a new download (platform specific)
-		DownloadPakFile->Download = MakeShared<FDreamChunkDownload>(MakeShared<ThisClass*>(this), DownloadPakFile);
+		// make a new download
+		TWeakObjectPtr<UDreamChunkDownloaderSubsystem> WeakThis(this);
+		DownloadPakFile->Download = MakeShared<FDreamChunkDownload>(WeakThis, DownloadPakFile);
 		DownloadPakFile->Download->Start();
+		StartedDownloads++;
+	}
+
+	if (StartedDownloads > 0)
+	{
+		DCD_LOG(Log, TEXT("Started %d new downloads"), StartedDownloads);
 	}
 }
 

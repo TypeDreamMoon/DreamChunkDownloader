@@ -34,6 +34,18 @@ public:
 public:
 	void Finalize();
 
+	void ProcessLocalPakFiles(const TArray<FDreamPakFileEntry>& LocalManifest, IFileManager& FileManager);
+
+	void SetupBuildId(const TSharedPtr<FJsonObject>& JsonObject);
+
+	void SetupChunkDownloadList(const TSharedPtr<FJsonObject>& JsonObject);
+	
+	bool IsReadyForPatching() const;
+	
+	void CreateDefaultLocalManifest();
+
+	bool ValidateManifestFile(const FString& ManifestPath, FString& OutErrorMessage);
+
 	bool LoadCachedBuild(const FString& DeploymentName);
 
 	void UpdateBuild(const FString& InDeploymentName, const FString& InContentBuildId, const FDreamChunkDownloaderTypes::FDreamCallback OnCallback);
@@ -46,6 +58,8 @@ public:
 
 	void DownloadChunk(int32 ChunkId, const FDreamChunkDownloaderTypes::FDreamCallback& OnCallback, int32 Priority);
 
+	void ValidateChunksAvailability();
+	
 	int32 FlushCache();
 
 	int ValidateCache();
@@ -65,7 +79,7 @@ protected:
 
 public:
 	UFUNCTION(BlueprintPure)
-	EDreamChunkStatus GetChunkStatus(int32 ChunkId);
+	EDreamChunkStatus GetChunkStatus(int32 ChunkId) const;
 
 	UFUNCTION(BlueprintPure)
 	void GetAllChunkIds(TArray<int32>& ChunkIds) const;
@@ -75,6 +89,9 @@ public:
 	{
 		return DownloadRequests.Num();
 	}
+
+	UFUNCTION(BlueprintPure)
+	float GetPatchProgress() const;
 
 	UFUNCTION(BlueprintPure)
 	FORCEINLINE FString GetCacheFolder() const
