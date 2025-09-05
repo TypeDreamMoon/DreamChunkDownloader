@@ -187,7 +187,7 @@ public:
 	 * @param InManifestFileDownloadHostIndex Index of CDN host to use
 	 * @return True if patching started successfully
 	 */
-	UFUNCTION(BlueprintCallable)
+	UFUNCTION(BlueprintCallable, Category = "DreamChunkDownloader")
 	bool StartPatchGame(int InManifestFileDownloadHostIndex = 0);
 
 	/**
@@ -197,7 +197,7 @@ public:
 	 * @param InOnMountCompletedEvent Delegate called when mounting completes
 	 * @return True if patching started successfully
 	 */
-	UFUNCTION(BlueprintCallable)
+	UFUNCTION(BlueprintCallable, Category = "DreamChunkDownloader")
 	bool StartPatchGameWithDelegate(int InManifestFileDownloadHostIndex,
 	                                const FDreamChunkDownloaderCallbackEvent& InOnPatchCompletedEvent,
 	                                const FDreamChunkDownloaderCallbackEvent& InOnMountCompletedEvent);
@@ -227,21 +227,21 @@ public:
 	 * @param ChunkId ID of the chunk to check
 	 * @return Current status of the chunk
 	 */
-	UFUNCTION(BlueprintPure)
+	UFUNCTION(BlueprintPure, Category = "DreamChunkDownloader")
 	EDreamChunkStatus GetChunkStatus(int32 ChunkId) const;
 
 	/**
 	 * Get all known chunk IDs
 	 * @param ChunkIds Output array of chunk IDs
 	 */
-	UFUNCTION(BlueprintPure)
+	UFUNCTION(BlueprintPure, Category = "DreamChunkDownloader")
 	void GetAllChunkIds(TArray<int32>& ChunkIds) const;
 
 	/**
 	 * Get the number of active download requests
 	 * @return Number of download requests
 	 */
-	UFUNCTION(BlueprintPure)
+	UFUNCTION(BlueprintPure, Category = "DreamChunkDownloader")
 	int32 GetNumDownloadRequests() const
 	{
 		return DownloadRequests.Num();
@@ -251,14 +251,14 @@ public:
 	 * Get the current patching progress as a percentage
 	 * @return Progress value between 0.0 and 1.0
 	 */
-	UFUNCTION(BlueprintPure)
+	UFUNCTION(BlueprintPure, Category = "DreamChunkDownloader")
 	float GetPatchProgress() const;
 
 	/**
 	 * Get the cache folder path
 	 * @return Path to the cache folder
 	 */
-	UFUNCTION(BlueprintPure)
+	UFUNCTION(BlueprintPure, Category = "DreamChunkDownloader")
 	FORCEINLINE FString GetCacheFolder() const
 	{
 		return CacheFolder;
@@ -268,7 +268,7 @@ public:
 	 * Get the base URLs for content downloads
 	 * @return Array of base URLs
 	 */
-	UFUNCTION(BlueprintPure)
+	UFUNCTION(BlueprintPure, Category = "DreamChunkDownloader")
 	FORCEINLINE TArray<FString>& GetBuildBaseUrls()
 	{
 		return BuildBaseUrls;
@@ -278,7 +278,7 @@ public:
 	 * Get loading statistics
 	 * @return Reference to loading stats structure
 	 */
-	UFUNCTION(BlueprintPure)
+	UFUNCTION(BlueprintPure, Category = "DreamChunkDownloader")
 	FORCEINLINE FDreamChunkDownloaderStats& GetStats()
 	{
 		return LoadingModeStats;
@@ -288,7 +288,7 @@ public:
 	 * Get the current content build ID
 	 * @return Current build ID
 	 */
-	UFUNCTION(BlueprintPure)
+	UFUNCTION(BlueprintPure, Category = "DreamChunkDownloader")
 	FORCEINLINE FString GetContentBuildId() const
 	{
 		return ContentBuildId;
@@ -298,7 +298,7 @@ public:
 	 * Get the current deployment name
 	 * @return Current deployment name
 	 */
-	UFUNCTION(BlueprintPure)
+	UFUNCTION(BlueprintPure, Category = "DreamChunkDownloader")
 	FORCEINLINE FString GetDeploymentName() const
 	{
 		return LastDeploymentName;
@@ -307,25 +307,25 @@ public:
 	/**
 	 * Whether the download manifest is up to date
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	bool bIsDownloadManifestUpToDate = false;
 
 	/**
 	 * List of chunk IDs that should be downloaded
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	TArray<int> ChunkDownloadList;
 
 	/**
 	 * Event called when patching completes
 	 */
-	UPROPERTY(BlueprintAssignable)
+	UPROPERTY(BlueprintAssignable, Category = "DreamChunkDownloader")
 	FDreamChunkDownloaderCallback OnPatchCompleted;
 
 	/**
 	 * Event called when mounting completes
 	 */
-	UPROPERTY(BlueprintAssignable)
+	UPROPERTY(BlueprintAssignable, Category = "DreamChunkDownloader")
 	FDreamChunkDownloaderCallback OnMountCompleted;
 
 	/**

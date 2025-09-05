@@ -132,11 +132,11 @@ struct FDreamChunkDownloaderDeploymentSet
 
 public:
 	/** Name of the deployment (e.g. Windows, Android, IOS) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "DreamChunkDownloader")
 	FString DeploymentName;
 
 	/** List of CDN host URLs for this deployment */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Config, Category = "DreamChunkDownloader")
 	TArray<FString> Hosts;
 };
 
@@ -153,35 +153,35 @@ public:
 	GENERATED_BODY()
 
 	/** Number of pak files that have been downloaded */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int FilesDownloaded = 0;
 
 	/** Total number of pak files that need to be downloaded */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int TotalFilesToDownload = 0;
 
 	/** Number of bytes that have been downloaded */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int64 BytesDownloaded = 0;
 
 	/** Total number of bytes that need to be downloaded */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int64 TotalBytesToDownload = 0;
 
 	/** Number of chunks that have been mounted */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int ChunksMounted = 0;
 
 	/** Total number of chunks that need to be mounted */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int TotalChunksToMount = 0;
 
 	/** UTC time when loading began (for rate calculations) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	FDateTime LoadingStartTime = FDateTime::MinValue();
 
 	/** Last error that occurred during operations */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	FText LastError;
 };
 
@@ -197,11 +197,11 @@ struct FDreamPakFileEntry
 	GENERATED_BODY()
 
 	/** Unique name of the pak file (filename only, no path) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	FString FileName;
 
 	/** Final size of the file in bytes */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int64 FileSize = 0;
 
 	/** 
@@ -209,15 +209,15 @@ struct FDreamPakFileEntry
 	 * When used for validation (if it begins with "SHA1:"), it's treated as a SHA1 hash
 	 * Otherwise, it's considered just a unique ID
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	FString FileVersion;
 
 	/** Chunk ID this pak file is assigned to */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int32 ChunkId = -1;
 
 	/** URL for this pak file (relative to CDN root, includes build-specific folder) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	FString RelativeUrl;
 };
 
@@ -233,27 +233,27 @@ struct FDreamPakFile
 	GENERATED_BODY()
 
 	/** Metadata entry for this pak file */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	FDreamPakFileEntry Entry;
 
 	/** Whether the file is fully cached locally */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	bool bIsCached = false;
 
 	/** Whether the file is currently mounted */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	bool bIsMounted = false;
 
 	/** Whether the file is embedded in the build */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	bool bIsEmbedded = false;
 
 	/** Current size of the file on disk (grows during download) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int64 SizeOnDisk = 0; // grows as the file is downloaded. See Entry.FileSize for the target size
 
 	/** Priority for download operations (higher values = higher priority) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int32 Priority = 0;
 
 	/** Active download operation for this file */
@@ -275,11 +275,11 @@ struct FDreamChunk
 	GENERATED_BODY()
 
 	/** ID of this chunk */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int32 ChunkId = -1;
 
 	/** Whether this chunk is currently mounted */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	bool bIsMounted = false;
 
 	/** List of pak files that make up this chunk */
@@ -317,23 +317,23 @@ struct FDreamManifestData
 	GENERATED_BODY()
 
 	/** Build ID for this manifest */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	FString BuildId;
 
 	/** Target platform for this manifest */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	FString Platform;
 
 	/** Manifest version */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	int32 Version = 1;
 
 	/** List of pak file entries in this manifest */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	TArray<FDreamPakFileEntry> PakFiles;
 
 	/** Additional properties stored in the manifest */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DreamChunkDownloader")
 	TMap<FString, FString> Properties;
 };
 
