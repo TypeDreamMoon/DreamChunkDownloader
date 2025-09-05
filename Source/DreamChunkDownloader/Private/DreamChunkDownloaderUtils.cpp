@@ -1,6 +1,7 @@
 ﻿#include "DreamChunkDownloaderUtils.h"
 
 #include "DreamChunkDownloaderLog.h"
+#include "DreamChunkDownloaderSettings.h"
 #include "DreamChunkDownloaderSubsystem.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -121,127 +122,7 @@ TArray<FDreamPakFileEntry> FDreamChunkDownloaderUtils::ParseManifest(const FStri
 
 TArray<FDreamPakFileEntry> FDreamChunkDownloaderUtils::ParseManifest(const FString& ManifestPath, TSharedPtr<FJsonObject>& JsonObject)
 {
-	int32 ExpectedEntries = -1;
-	TArray<FDreamPakFileEntry> Entries;
-	JsonObject.Reset();
-
-	FString FileStrings;
-	if (!FFileHelper::LoadFileToString(FileStrings, *ManifestPath))
-	{
-		DCD_LOG(Log, TEXT("Unable to load manifest file %s"), *ManifestPath);
-		return Entries;
-	}
-
-	if (FileStrings.IsEmpty())
-	{
-		DCD_LOG(Log, TEXT("Manifest file %s is empty"), *ManifestPath);
-		return Entries;
-	}
-
-	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FileStrings);
-	TSharedPtr<FJsonObject> Object;
-
-	if (!FJsonSerializer::Deserialize(Reader, Object) || !Object.IsValid())
-	{
-		DCD_LOG(Error, TEXT("Failed to deserialize JSON from manifest file %s"), *ManifestPath);
-		return Entries;
-	}
-
-	DCD_LOG(Log, TEXT("Deserialize Data : %s"), *FileStrings);
-
-	// 设置输出JsonObject
-	JsonObject = Object;
-
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& ValuePair : Object->Values)
-	{
-		if (!ValuePair.Value.IsValid())
-		{
-			continue;
-		}
-
-		if (ValuePair.Key == ENTRIES_COUNT_FIELD)
-		{
-			double NumberValue = 0;
-			if (ValuePair.Value->TryGetNumber(NumberValue))
-			{
-				ExpectedEntries = static_cast<int32>(NumberValue);
-			}
-		}
-		else if (ValuePair.Key == ENTRIES_FIELD)
-		{
-			const TArray<TSharedPtr<FJsonValue>>* EntryArray = nullptr;
-			if (ValuePair.Value->TryGetArray(EntryArray) && EntryArray)
-			{
-				for (const TSharedPtr<FJsonValue>& EntryValue : *EntryArray)
-				{
-					if (!EntryValue.IsValid())
-					{
-						continue;
-					}
-
-					const TSharedPtr<FJsonObject> EntryObject = EntryValue->AsObject();
-					if (!EntryObject.IsValid())
-					{
-						DCD_LOG(Warning, TEXT("Invalid entry object in manifest"));
-						continue;
-					}
-
-					FDreamPakFileEntry EntryStruct;
-
-					// 安全地获取各个字段
-					if (!EntryObject->TryGetStringField(FILE_NAME_FIELD, EntryStruct.FileName))
-					{
-						DCD_LOG(Warning, TEXT("Entry missing FileName field"));
-						continue;
-					}
-
-					double FileSizeDouble = 0;
-					if (!EntryObject->TryGetNumberField(FILE_SIZE_FIELD, FileSizeDouble))
-					{
-						DCD_LOG(Warning, TEXT("Entry missing FileSize field for %s"), *EntryStruct.FileName);
-						continue;
-					}
-					EntryStruct.FileSize = static_cast<uint64>(FileSizeDouble);
-
-					if (!EntryObject->TryGetStringField(FILE_VERSION_FIELD, EntryStruct.FileVersion))
-					{
-						DCD_LOG(Warning, TEXT("Entry missing FileVersion field for %s"), *EntryStruct.FileName);
-						continue;
-					}
-
-					// ChunkId可能不存在，给默认值
-					int32 ChunkIdValue = -1;
-					if (EntryObject->TryGetNumberField(FILE_CHUNK_ID_FIELD, ChunkIdValue))
-					{
-						EntryStruct.ChunkId = ChunkIdValue;
-					}
-					else
-					{
-						EntryStruct.ChunkId = -1;
-					}
-
-					// RelativeUrl可能不存在，给默认值
-					if (!EntryObject->TryGetStringField(FILE_RELATIVE_URL_FIELD, EntryStruct.RelativeUrl))
-					{
-						EntryStruct.RelativeUrl = TEXT("/");
-					}
-
-					Entries.Add(EntryStruct);
-				}
-			}
-		}
-	}
-
-	// 验证entries数量
-	if (ExpectedEntries >= 0 && ExpectedEntries != Entries.Num())
-	{
-		DCD_LOG(Error, TEXT("Corrupt manifest at %s (expected %d entries, got %d)"), *ManifestPath, ExpectedEntries, Entries.Num());
-		Entries.Empty();
-		JsonObject.Reset(); // 清空JsonObject
-	}
-
-	DCD_LOG(Log, TEXT("Successfully parsed %d entries from manifest %s"), Entries.Num(), *ManifestPath);
-	return Entries;
+	return ParseManifest(ManifestPath, JsonObject, nullptr);
 }
 
 TArray<FDreamPakFileEntry> FDreamChunkDownloaderUtils::ParseManifest(const FString& ManifestPath, TSharedPtr<FJsonObject>& OutJsonObject, TMap<FString, FString>* OutProperties)

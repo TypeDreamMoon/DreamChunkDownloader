@@ -23,25 +23,22 @@ public:
 	virtual FName GetSectionName() const override { return FName(TEXT("ChunkDownloaderSetting")); }
 
 public:
-	// Use Remote Chunk Download List
-	// When enabled, the list of downloaded chunks will use the remote list
-	// if use, please go to manifest to add "download-chunk-id-list" in manifest.json
+	// Use Remote Chunk Download List And Build ID
+	// if use, please go to manifest to add "download-chunk-id-list" and "client-build-id" in manifest.json
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "Settings")
-	bool bUseRemoteChunkDownloadList = false;
+	bool bUseStaticRemoteHost = false;
 
+	// Static Remote Host
+	// If remote build ID or remote chunk download list is enabled, you need to configure the static remote host to get BuildID and DownloadChunkIds
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "Settings", Meta = (EditCondition = "bUseStaticRemoteHost"))
+	FString StaticRemoteHost = "sample.com/data/";
+	
 	// Download Chunk Ids
-	// Chunk Ids to download
-	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "Settings", Meta = (EditCondition = "!bUseRemoteChunkDownloadList"))
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "Settings", Meta = (EditCondition = "!bUseStaticRemoteHost"))
 	TArray<int> DownloadChunkIds;
 
-	// Use Remote Build ID
-	// When enabled, the build id will use the remote build id
-	// if use, please go to manifest to add "client-build-id" in manifest.json
-	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "Settings")
-	bool bUseRemoteBuildID;
-
 	// Build ID
-	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "Settings", Meta = (EditCondition = "!bUseRemoteBuildID"))
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "Settings", Meta = (EditCondition = "!bUseStaticRemoteHost"))
 	FString BuildID = TEXT("0.0.0");
 	
 	// Cache Folder
@@ -60,10 +57,6 @@ public:
 	// Support Deployment: Windows, Android, IOS, Mac, Linux
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "Settings")
 	TArray<FDreamChunkDownloaderDeploymentSet> DeploymentSets;
-
-	// Download Server Path
-	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "File")
-	FString DownloadServerPath = "sample-package/";
 
 	// Embedded Manifest File Name
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "File")

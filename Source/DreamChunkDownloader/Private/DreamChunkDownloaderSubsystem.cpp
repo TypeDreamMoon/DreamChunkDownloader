@@ -139,7 +139,7 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 
 void UDreamChunkDownloaderSubsystem::SetupChunkDownloadList(const TSharedPtr<FJsonObject>& JsonObject)
 {
-	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteChunkDownloadList)
+	if (UDreamChunkDownloaderSettings::Get()->bUseStaticRemoteHost)
 	{
 		if (JsonObject.IsValid() && JsonObject->HasField(DOWNLOAD_CHUNK_ID_LIST_FIELD))
 		{
@@ -178,7 +178,7 @@ void UDreamChunkDownloaderSubsystem::SetupChunkDownloadList(const TSharedPtr<FJs
 
 void UDreamChunkDownloaderSubsystem::SetupBuildId(const TSharedPtr<FJsonObject>& JsonObject)
 {
-	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteBuildID)
+	if (UDreamChunkDownloaderSettings::Get()->bUseStaticRemoteHost)
 	{
 		if (JsonObject.IsValid() && JsonObject->HasField(CLIENT_BUILD_ID))
 		{
@@ -265,7 +265,7 @@ void UDreamChunkDownloaderSubsystem::CreateDefaultLocalManifest()
 	Writer->WriteArrayEnd();
 
 	// 根据配置添加远程下载列表
-	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteChunkDownloadList)
+	if (UDreamChunkDownloaderSettings::Get()->bUseStaticRemoteHost)
 	{
 		Writer->WriteArrayStart(DOWNLOAD_CHUNK_ID_LIST_FIELD);
 		const TArray<int32>& DefaultChunks = UDreamChunkDownloaderSettings::Get()->DownloadChunkIds;
@@ -275,11 +275,7 @@ void UDreamChunkDownloaderSubsystem::CreateDefaultLocalManifest()
 		}
 		Writer->WriteArrayEnd();
 		DCD_LOG(Log, TEXT("Added %d default chunk IDs to manifest"), DefaultChunks.Num());
-	}
 
-	// 根据配置添加远程构建ID
-	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteBuildID)
-	{
 		const FString& DefaultBuildId = UDreamChunkDownloaderSettings::Get()->BuildID;
 		Writer->WriteValue(CLIENT_BUILD_ID, DefaultBuildId);
 		DCD_LOG(Log, TEXT("Added default build ID '%s' to manifest"), *DefaultBuildId);
@@ -1676,6 +1672,12 @@ void UDreamChunkDownloaderSubsystem::TryDownloadBuildManifest(int TryNumber)
 	FString ManifestFileName = FString::Printf(TEXT("BuildManifest-%s.json"), *PlatformName);
 	FString Url = BuildBaseUrls[TryNumber % BuildBaseUrls.Num()] / ManifestFileName;
 
+	if (UDreamChunkDownloaderSettings::Get()->bUseStaticRemoteHost)
+	{
+		Url = UDreamChunkDownloaderSettings::Get()->StaticRemoteHost / ManifestFileName;
+		DCD_LOG(Log, TEXT("Using static remote host: %s"), *Url);
+	}
+
 	DCD_LOG(Log, TEXT("Downloading build manifest (attempt #%d) from %s"), TryNumber + 1, *Url);
 
 	// Download the manifest from the root CDN
@@ -1799,6 +1801,8 @@ void UDreamChunkDownloaderSubsystem::TryDownloadBuildManifest(int TryNumber)
 			}
 		});
 
+	
+
 	// Start the HTTP request
 	if (!ManifestRequest->ProcessRequest())
 	{
@@ -1887,7 +1891,7 @@ void UDreamChunkDownloaderSubsystem::SaveLocalManifest(bool bForce)
 	}
 	Writer->WriteArrayEnd();
 
-	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteChunkDownloadList)
+	if (UDreamChunkDownloaderSettings::Get()->bUseStaticRemoteHost)
 	{
 		Writer->WriteArrayStart(DOWNLOAD_CHUNK_ID_LIST_FIELD);
 		for (int32 ChunkId : ChunkDownloadList)
@@ -1895,13 +1899,10 @@ void UDreamChunkDownloaderSubsystem::SaveLocalManifest(bool bForce)
 			Writer->WriteValue(ChunkId);
 		}
 		Writer->WriteArrayEnd();
-	}
 
-	if (UDreamChunkDownloaderSettings::Get()->bUseRemoteBuildID)
-	{
 		Writer->WriteValue(CLIENT_BUILD_ID, ContentBuildId);
 	}
-
+	
 	Writer->WriteObjectEnd();
 	Writer->Close();
 
