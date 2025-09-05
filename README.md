@@ -1,5 +1,7 @@
 # DreamChunkDownloader
 
+本插件正在逐步开发中。。。目前已实现基本功能，可能会有小问题。欢迎提交 [Issues](https://github.com/TypeDreamMoon/DreamChunkDownloader/issues)
+
 基于虚幻引擎ChunkDownloader 重构后的分包下载插件。
 
 将原有.txt文件转换为json文件 更简单的配置`GoTo ProjectSettings/DreamPlugin/DreamChunkDownloaderSettings`
