@@ -1,13 +1,13 @@
-﻿{
+{
 	"FileVersion": 3,
 	"Version": 1,
-	"VersionName": "1.0",
+	"VersionName": "0.1.0",
 	"FriendlyName": "DreamChunkDownloader",
 	"Description": "Chunk Downloader Refactoring",
-	"Category": "Other",
+	"Category": "DreamPlugin",
 	"CreatedBy": "DreamMoon",
 	"CreatedByURL": "https://github.com/TypeDreamMoon",
-	"DocsURL": "",
+	"DocsURL": "https://github.com/TypeDreamMoon/DreamChunkDownloader",
 	"MarketplaceURL": "",
 	"CanContainContent": true,
 	"IsBetaVersion": false,
@@ -19,5 +19,6 @@
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
 		}
-	]
+	],
+	"SupportURL": "https://github.com/TypeDreamMoon/DreamChunkDownloader/issues"
 }
