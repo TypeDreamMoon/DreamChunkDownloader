@@ -1,4 +1,7 @@
-﻿#include "DreamChunkDownloaderPlatformWrapper.h"
+﻿// Copyright (C) 2025 Dream Moon, All Rights Reserved.
+
+
+#include "DreamChunkDownloaderPlatformWrapper.h"
 
 #include "DreamChunkDownloaderTypes.h"
 #include "DreamChunkDownloaderSubsystem.h"
@@ -26,7 +29,9 @@ EChunkLocation::Type FDreamChunkDownloaderPlatformWrapper::GetChunkLocation(uint
 	case EDreamChunkStatus::Partial:
 	case EDreamChunkStatus::Downloading:
 	case EDreamChunkStatus::Cached:
+	case EDreamChunkStatus::Unknown:
 		return EChunkLocation::NotAvailable;
+	
 	}
 	return EChunkLocation::DoesNotExist;
 }

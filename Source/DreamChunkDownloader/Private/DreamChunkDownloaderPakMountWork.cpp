@@ -1,4 +1,7 @@
-﻿#include "DreamChunkDownloaderPakMountWork.h"
+﻿// Copyright (C) 2025 Dream Moon, All Rights Reserved.
+
+
+#include "DreamChunkDownloaderPakMountWork.h"
 
 #include "DreamChunkDownloaderLog.h"
 #include "DreamChunkDownloaderTypes.h"

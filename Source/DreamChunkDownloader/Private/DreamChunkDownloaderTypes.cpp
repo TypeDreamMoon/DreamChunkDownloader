@@ -1,4 +1,7 @@
-﻿#include "DreamChunkDownloaderTypes.h"
+﻿// Copyright (C) 2025 Dream Moon, All Rights Reserved.
+
+
+#include "DreamChunkDownloaderTypes.h"
 
 FDreamMultiCallback::FDreamMultiCallback(const FDreamChunkDownloaderTypes::FDreamCallback& OnCallback)
 	: OuterCallback(OnCallback)

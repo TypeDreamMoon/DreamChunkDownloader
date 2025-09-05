@@ -1,5 +1,5 @@
-﻿// Copyright Epic Games, Inc. All Rights Reserved.
-// R
+﻿// Copyright (C) 2025 Dream Moon, All Rights Reserved.
+
 
 #include "DreamChunkDownloaderPlatformStreamDownload.h"
 #include "DreamChunkDownloaderLog.h"

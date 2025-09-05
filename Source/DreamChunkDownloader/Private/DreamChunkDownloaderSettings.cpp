@@ -1,4 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Copyright (C) 2025 Dream Moon, All Rights Reserved.
 
 
 #include "DreamChunkDownloaderSettings.h"

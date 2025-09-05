@@ -1,4 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Copyright (C) 2025 Dream Moon, All Rights Reserved.
 
 
 #include "DreamChunkDownloaderSubsystem.h"
@@ -26,7 +26,17 @@ void UDreamChunkDownloaderSubsystem::Initialize(FSubsystemCollectionBase& Collec
 {
 	Super::Initialize(Collection);
 
-	PlatformName = FDreamChunkDownloaderUtils::GetTargetPlatformName();
+	OnMountCompletedInternal.AddLambda([this](bool bSuccess)
+	{
+		OnMountCompleted.Broadcast(bSuccess);
+	});
+
+	OnPatchCompletedInternal.AddLambda([this](bool bSuccess)
+	{
+		OnPatchCompleted.Broadcast(bSuccess);
+	});
+
+		PlatformName = FDreamChunkDownloaderUtils::GetTargetPlatformName();
 
 	FString PackageBaseDir;
 	switch (UDreamChunkDownloaderSettings::Get()->CacheFolderPath)
@@ -353,14 +363,22 @@ void UDreamChunkDownloaderSubsystem::Deinitialize()
 	Super::Deinitialize();
 
 	Finalize();
-	
+
 	if (OnPatchCompleted.IsBound())
 	{
 		OnPatchCompleted.Clear();
 	}
 	if (OnMountCompleted.IsBound())
 	{
-		OnMountCompleted.Clear();		
+		OnMountCompleted.Clear();
+	}
+	if (OnPatchCompletedInternal.IsBound())
+	{
+		OnPatchCompletedInternal.Clear();
+	}
+	if (OnMountCompletedInternal.IsBound())
+	{
+		OnMountCompletedInternal.Clear();
 	}
 }
 
@@ -1071,7 +1089,7 @@ bool UDreamChunkDownloaderSubsystem::StartPatchGame(int InManifestFileDownloadHo
 			else
 			{
 				DCD_LOG(Error, TEXT("Failed to update manifest, cannot start patch"));
-				OnPatchCompleted.Broadcast(false);
+				OnPatchCompletedInternal.Broadcast(false);
 			}
 		});
 		return true; // 异步处理中
@@ -1132,7 +1150,7 @@ bool UDreamChunkDownloaderSubsystem::StartPatchGame(int InManifestFileDownloadHo
 	if (MountedChunks.Num() == ChunkDownloadList.Num())
 	{
 		DCD_LOG(Log, TEXT("All chunks are already mounted, patch completed"));
-		OnPatchCompleted.Broadcast(true);
+		OnPatchCompletedInternal.Broadcast(true);
 		return true;
 	}
 
@@ -1189,6 +1207,22 @@ bool UDreamChunkDownloaderSubsystem::StartPatchGame(int InManifestFileDownloadHo
 	}
 
 	return true;
+}
+
+bool UDreamChunkDownloaderSubsystem::StartPatchGameWithDelegate(
+	int InManifestFileDownloadHostIndex,
+	const FDreamChunkDownloaderCallbackEvent& InOnPatchCompletedEvent,
+	const FDreamChunkDownloaderCallbackEvent& InOnMountCompletedEvent)
+{
+	OnPatchCompletedInternal.AddLambda([this, InOnPatchCompletedEvent](bool bSuccess)
+	{
+		InOnPatchCompletedEvent.Execute(bSuccess);
+	});
+	OnMountCompletedInternal.AddLambda([this, InOnMountCompletedEvent](bool bSuccess)
+	{
+		InOnMountCompletedEvent.Execute(bSuccess);
+	});
+	return StartPatchGame(InManifestFileDownloadHostIndex);
 }
 
 void UDreamChunkDownloaderSubsystem::HandleDownloadCompleted(bool bSuccess)
@@ -1267,24 +1301,24 @@ void UDreamChunkDownloaderSubsystem::HandleDownloadCompleted(bool bSuccess)
 			}
 
 			DCD_LOG(Warning, TEXT("No chunks ready for mounting after download. Chunk statuses: %s"), *ChunkStatuses);
-			OnPatchCompleted.Broadcast(false);
+			OnPatchCompletedInternal.Broadcast(false);
 		}
 	}
 	else
 	{
 		DCD_LOG(Error, TEXT("Download failed."));
-		OnPatchCompleted.Broadcast(false);
+		OnPatchCompletedInternal.Broadcast(false);
 	}
 }
 
 void UDreamChunkDownloaderSubsystem::HandleLoadingModeCompleted(bool bSuccess)
 {
-	OnPatchCompleted.Broadcast(bSuccess);
+	OnPatchCompletedInternal.Broadcast(bSuccess);
 }
 
 void UDreamChunkDownloaderSubsystem::HandleMountCompleted(bool bSuccess)
 {
-	OnMountCompleted.Broadcast(bSuccess);
+	OnMountCompletedInternal.Broadcast(bSuccess);
 }
 
 EDreamChunkStatus UDreamChunkDownloaderSubsystem::GetChunkStatus(int32 ChunkId) const
@@ -1801,7 +1835,6 @@ void UDreamChunkDownloaderSubsystem::TryDownloadBuildManifest(int TryNumber)
 			}
 		});
 
-	
 
 	// Start the HTTP request
 	if (!ManifestRequest->ProcessRequest())
@@ -1902,7 +1935,7 @@ void UDreamChunkDownloaderSubsystem::SaveLocalManifest(bool bForce)
 
 		Writer->WriteValue(CLIENT_BUILD_ID, ContentBuildId);
 	}
-	
+
 	Writer->WriteObjectEnd();
 	Writer->Close();
 

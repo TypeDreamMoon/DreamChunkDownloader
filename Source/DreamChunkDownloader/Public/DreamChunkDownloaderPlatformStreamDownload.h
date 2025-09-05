@@ -1,11 +1,12 @@
-﻿// Copyright Epic Games, Inc. All Rights Reserved.
-// Refactoring By Dream Moon
+﻿// Copyright (C) 2025 Dream Moon, All Rights Reserved.
+
 
 #pragma once
 
 #include "HAL/Platform.h"
 
 class FString;
+
 template <typename FuncType> class TFunction;
 
 typedef TFunction<void(int32 HttpStatus)> FDreamDownloadComplete;
