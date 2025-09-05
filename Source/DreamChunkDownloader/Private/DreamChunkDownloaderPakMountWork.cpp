@@ -3,6 +3,10 @@
 
 #include "DreamChunkDownloaderPakMountWork.h"
 
+#include "HAL/FileManager.h"
+#include "Misc/CoreDelegates.h"
+#include "GenericPlatform/GenericPlatformFile.h"
+
 #include "DreamChunkDownloaderLog.h"
 #include "DreamChunkDownloaderTypes.h"
 

@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "IPlatformFilePak.h"
+#include "Async/AsyncWork.h"
 #include "DreamChunkDownloaderTypes.generated.h"
 
 class FDreamChunkDownload;

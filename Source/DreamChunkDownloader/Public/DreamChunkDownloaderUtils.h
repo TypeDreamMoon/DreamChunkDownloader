@@ -4,6 +4,8 @@
 
 #include "CoreMinimal.h"
 
+class FJsonObject;
+class FJsonValue;
 struct FDreamPakFileEntry;
 enum class EDreamChunkStatus : uint8;
 

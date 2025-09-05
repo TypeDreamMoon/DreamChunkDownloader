@@ -3,10 +3,18 @@
 
 #include "DreamChunkDownloaderUtils.h"
 
+#include "Engine/World.h"
+#include "Engine/GameInstance.h"
+#include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
+#include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
+#include "Serialization/JsonWriter.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+
 #include "DreamChunkDownloaderLog.h"
-#include "DreamChunkDownloaderSettings.h"
 #include "DreamChunkDownloaderSubsystem.h"
-#include "Kismet/GameplayStatics.h"
 
 using namespace FDreamChunkDownloaderStatics;
 

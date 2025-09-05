@@ -5,11 +5,16 @@
 #include "CoreMinimal.h"
 #include "DreamChunkDownloaderTypes.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "Containers/Ticker.h"
 #include "DreamChunkDownloaderSubsystem.generated.h"
 
 class FDreamChunkDownloaderPlatformWrapper;
 class FDreamChunkDownload;
 class IHttpRequest;
+class IFileManager;
+class FJsonObject;
+class FJsonValue;
+
 
 // Delegate for chunk mount events - called when a chunk is mounted/unmounted
 DECLARE_MULTICAST_DELEGATE_TwoParams(FDreamPlatformChunkInstallMultiDelegate, uint32, bool);
